@@ -15,7 +15,7 @@ HEADER = "date,campaign_id,campaign_name,channel,country,objective,impressions,c
 def isolated_outputs(tmp_path, monkeypatch):
     """Los tests que corren el pipeline entero escriben en una carpeta temporal, no en output/."""
     monkeypatch.setattr(p, "ROOT", tmp_path)
-    for name in ["REJECTED_CSV", "DAILY_CSV", "SUMMARY_CSV"]:
+    for name in ["REJECTED_CSV", "CORRECTED_CSV", "DAILY_CSV", "SUMMARY_CSV"]:
         monkeypatch.setattr(p, name, tmp_path / "output" / getattr(p, name).name)
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
@@ -24,7 +24,8 @@ def isolated_outputs(tmp_path, monkeypatch):
 def run_clean(tmp_path, *rows):
     path = tmp_path / "campaigns.csv"
     path.write_text("\n".join([HEADER, *rows]) + "\n", encoding="utf-8")
-    return p.clean(p.load_raw(path))
+    clean, rejected, _corrected, report = p.clean(p.load_raw(path))
+    return clean, rejected, report
 
 
 def row(date="2026-09-04", campaign="C1004", name="AR_CONV_Meta_Q4", channel="Meta Ads",
@@ -60,9 +61,9 @@ def test_to_number(text, expected):
     assert p.to_number(text) == expected
 
 
-def test_accounting_negative_spend_is_rejected(tmp_path):
+def test_accounting_negative_spend_is_corrected_too(tmp_path):
     clean, rejected, _ = run_clean(tmp_path, row(spend='"(182.41)"'))
-    assert clean.empty and rejected.loc[0, "reason"] == "valor negativo"
+    assert rejected.empty and clean["spend"].iloc[0] == 182.41
 
 
 # --- Forma del archivo ---------------------------------------------------------------------------
@@ -126,9 +127,9 @@ def test_impossible_rows_are_rejected_with_every_reason(tmp_path):
     clean, rejected, _ = run_clean(
         tmp_path,
         row(),
-        row(date="2026-09-05", spend="-10"),
+        row(date="2026-09-05", conversions="-1"),
         row(date="2026-09-06", clicks="2000"),
-        row(date="2026-09-07", spend="-10", clicks="2000"),
+        row(date="2026-09-07", impressions="-5"),  # negativa y, por eso, menos que los clicks
     )
     assert len(clean) == 1
     assert list(rejected["reason"]) == [
@@ -136,7 +137,22 @@ def test_impossible_rows_are_rejected_with_every_reason(tmp_path):
         "más clicks que impresiones",
         "valor negativo; más clicks que impresiones",
     ]
-    assert rejected.loc[0, "spend"] == "-10"  # el descartado se guarda tal como venía
+    assert rejected.loc[0, "conversions"] == "-1"  # el descartado se guarda tal como venía
+
+
+def test_negative_spend_is_made_positive_and_recorded(tmp_path):
+    path = tmp_path / "campaigns.csv"
+    rows = [row(spend="-328.33"), row(spend="-328.33"), row(date="2026-09-05", spend="-50", clicks="2000")]
+    path.write_text("\n".join([HEADER, *rows]) + "\n", encoding="utf-8")
+    clean, rejected, corrected, report = p.clean(p.load_raw(path))
+
+    assert clean["spend"].tolist() == [328.33]  # la copia corregida se detecta como duplicado
+    assert list(corrected["source_line"]) == [2]
+    assert corrected.loc[0, "spend"] == "-328.33"  # se guarda tal como venía
+    assert corrected.loc[0, "correction"] == "spend -328.33 pasado a positivo"
+    assert report["gasto negativo pasado a positivo"] == 1
+    # La que además tiene más clicks que impresiones se descarta: figura en rejected, no en corrected.
+    assert list(rejected["source_line"]) == [3, 4]
 
 
 def test_blank_results_keep_the_row_and_stay_blank(tmp_path):
@@ -158,7 +174,6 @@ def test_merge_sums_rows_of_the_same_campaign_and_day(tmp_path):
     assert len(daily) == 1
     assert daily.loc[0, "spend"] == 80
     assert daily.loc[0, "impressions"] == 1500
-    assert daily.loc[0, "source_rows"] == 2
 
 
 def test_merge_blank_part_leaves_the_total_blank(tmp_path):
@@ -264,7 +279,7 @@ def test_quality_gate(read, valid, publishes):
 
 def test_broken_file_stops_before_publishing(tmp_path, monkeypatch):
     path = tmp_path / "broken.csv"
-    path.write_text("\n".join([HEADER, row(spend="-1")]) + "\n", encoding="utf-8")
+    path.write_text("\n".join([HEADER, row(clicks="2000")]) + "\n", encoding="utf-8")
     monkeypatch.setattr("sys.argv", ["pipeline.py", "--input", str(path)])
     monkeypatch.setattr(p, "publish", lambda *_: pytest.fail("publicó un archivo roto"))
     with pytest.raises(SystemExit) as stopped:
@@ -276,7 +291,7 @@ def test_broken_file_stops_before_publishing(tmp_path, monkeypatch):
 
 def test_step_summary_reports_why_a_broken_file_was_not_published(tmp_path, monkeypatch, capsys):
     path = tmp_path / "broken.csv"
-    path.write_text("\n".join([HEADER, row(spend="-1")]) + "\n", encoding="utf-8")
+    path.write_text("\n".join([HEADER, row(clicks="2000")]) + "\n", encoding="utf-8")
     summary = tmp_path / "summary.md"
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
@@ -307,16 +322,16 @@ def test_step_summary_explains_a_file_with_the_wrong_shape(tmp_path, monkeypatch
 # --- El archivo real del caso --------------------------------------------------------------------
 
 def test_real_file_end_to_end():
-    clean, rejected, report = p.clean(p.load_raw(p.RAW_CSV))
+    clean, rejected, corrected, report = p.clean(p.load_raw(p.RAW_CSV))
     daily, _ = p.merge_same_day(clean)
     summary = p.summarize(p.add_metrics(daily))
 
-    assert (report["filas leídas"], report["filas válidas"], len(rejected)) == (214, 198, 16)
-    assert report["inválidas descartadas"] == 10  # 5 negativas + 6 con más clicks, una con las dos
-    assert len(daily) == 142 and len(summary) == 12
+    assert (report["filas leídas"], report["filas válidas"], len(rejected)) == (214, 202, 12)
+    assert report["inválidas descartadas"] == 6  # más clicks que impresiones
+    assert len(corrected) == 4  # gasto negativo pasado a positivo (la quinta se descarta igual)
+    assert len(daily) == 145 and len(summary) == 12
     assert not daily.duplicated(["date", "campaign_id"]).any()  # clave primaria
     assert not summary.duplicated("campaign_id").any()
-    assert daily["source_rows"].sum() == 198
     assert daily["spend"].sum() == pytest.approx(clean["spend"].sum())
     assert summary["spend"].sum() == pytest.approx(daily["spend"].sum())
     assert p.quality_gate(report) == []

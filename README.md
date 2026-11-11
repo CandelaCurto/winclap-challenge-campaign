@@ -13,7 +13,7 @@ Corre desde GitHub Actions a mano y todos los lunes.
 
 ```
 data/campaigns.csv → validar → limpiar → unir por campaña y día → métricas → resumen → control → Google Sheets
-     214 filas                  198 válidas       142 filas                    12 filas
+     214 filas                  202 válidas       145 filas                    12 filas
 ```
 
 ## Contenido del repo
@@ -27,8 +27,10 @@ data/campaigns.csv → validar → limpiar → unir por campaña y día → mét
 | `.python-version` | Python 3.14, la misma versión en local y en GitHub Actions |
 | `.github/workflows/pipeline.yml` | La ejecución en GitHub Actions |
 
-Cada corrida genera además `output/` (no se versiona): las dos tablas en CSV y `rejected_rows.csv`,
-con cada fila descartada tal como venía, su línea en el archivo original y el motivo.
+Cada corrida genera además `output/` (no se versiona): las dos tablas en CSV, `rejected_rows.csv`
+(cada fila descartada tal como venía, su línea en el archivo original y el motivo) y
+`corrected_rows.csv` (cada fila corregida, tal como venía, y la corrección hecha). Esas dos últimas
+se publican también en un **Sheet de revisión** aparte, si está configurado.
 
 ## Cómo correrlo
 
@@ -37,7 +39,7 @@ python -m venv .venv
 source .venv/bin/activate          # en Windows: .venv\Scripts\activate
 pip install -r requirements-dev.txt
 
-python -m pytest                   # 51 tests: no publican nada ni necesitan credenciales
+python -m pytest                   # 52 tests: no publican nada ni necesitan credenciales
 python pipeline.py --no-publish    # procesa data/campaigns.csv y deja el resultado en output/
 python pipeline.py --input otro.csv --no-publish
 ```
@@ -53,6 +55,7 @@ Para publicar en un Google Sheet:
 | `SPREADSHEET_ID` | El ID del Sheet (la parte de la URL entre `/d/` y `/edit`) |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Ruta al JSON de la cuenta de servicio (en una computadora) |
 | `GOOGLE_CREDENTIALS` | El contenido de ese JSON (en GitHub Actions, como secreto del repo) |
+| `REVIEW_SPREADSHEET_ID` | Opcional: el ID de otro Sheet para las filas descartadas y corregidas |
 
 Cada corrida **reemplaza** el contenido de las dos tabs: correrla dos veces no duplica datos.
 
@@ -78,14 +81,14 @@ Cada corrida **reemplaza** el contenido de las dos tabs: correrla dos veces no d
 | El canal escrito de 8 formas (`GOOGLE ADS`, `google ads`, `meta`, `Facebook Ads`…) | todas | Se reconoce por palabra clave → `Google Ads`, `Meta Ads`, `LinkedIn Ads` |
 | Gasto como texto con formato de moneda (`"$ 182,41"`) | 9 | Se convierte a número |
 | Duplicados exactos | 6 | Se descartan |
-| Gasto negativo | 5 | Se descarta la fila |
+| Gasto negativo | 5 | Se pasa a positivo (supuesto: error de signo). 4 quedan; la quinta se descarta igual por más clicks que impresiones |
 | Más clicks que impresiones (ej. 114.055 impresiones, 114.102 clicks) | 6 | Se descarta la fila: un click requiere una impresión |
 | Conversiones o revenue vacíos | 6 y 5 | La fila se queda; el valor queda **vacío, no 0** |
 | Varias filas de la misma campaña el mismo día, con números distintos | 47 campañas-día | Se unen en una fila, sumando |
 | Dos campañas distintas con el mismo nombre (C1001 y C1006) | — | Todo se agrupa por `campaign_id`, nunca por nombre |
 
-Resultado: 214 filas → 6 duplicados y 10 inválidas descartados (16, el 7,5 %) → **198 filas
-válidas** → **142 filas** de campaña y día → **12 campañas**.
+Resultado: 214 filas → 6 duplicados y 6 inválidas descartados (12, el 5,6 %) → **202 filas
+válidas** (4 con el gasto corregido) → **145 filas** de campaña y día → **12 campañas**.
 
 ## Decisiones y por qué
 
@@ -105,15 +108,23 @@ en todas las filas.
 
 **Números con coma o punto.** El último separador es decimal si lo siguen 1 o 2 dígitos; si no, son de
 miles: `"$ 182,41"` → 182.41 · `"1.234,5"` → 1234.5 · `"1,234.50"` → 1234.5 · `"114.055"` → 114055.
-Entre paréntesis es negativo, como en contabilidad: `"(182.41)"` → -182.41, así ese gasto negativo
-también se descarta. Junto al número solo se acepta un símbolo o código de moneda (`$`, `US$`, `USD`,
+Entre paréntesis es negativo, como en contabilidad: `"(182.41)"` → -182.41 (y, como todo gasto
+negativo, después se pasa a positivo). Junto al número solo se acepta un símbolo o código de moneda (`$`, `US$`, `USD`,
 `€`); cualquier otra cosa (`1e3`, `n/a`) deja el valor vacío con un aviso en vez de adivinarlo.
 
 **Los duplicados se buscan después de normalizar.** Así se detectan también dos copias de una fila que
 solo difieren en el formato de la fecha o en espacios.
 
-**Se descarta lo imposible, no lo raro.** Gasto o cantidades negativas, más clicks que impresiones,
-fecha ilegible o falta de impresiones, clicks o gasto. Una cantidad con decimales (12,5 clicks) queda
+**El gasto negativo se pasa a positivo.** Un gasto no puede ser negativo, así que se asume que el
+monto es correcto y el signo es un error de carga: se corrige en vez de perder la fila. Es un
+supuesto: si el negativo fuera, por ejemplo, un reembolso, habría que restarlo. Cada corrección queda
+en `corrected_rows`, con la fila original y el cambio (`spend -328.33 pasado a positivo`), para que
+se pueda revisar. Se corrige antes de buscar duplicados, así dos copias de la misma fila siguen
+siendo iguales.
+
+**Se descarta lo imposible, no lo raro.** Más clicks que impresiones (un click requiere una
+impresión), impresiones, clicks, conversiones o revenue negativos, fecha ilegible o falta de
+impresiones, clicks o gasto. Una cantidad con decimales (12,5 clicks) queda
 vacía con un aviso en vez de redondearse a escondidas. Las reglas cubren casos que este archivo no
 tiene, pensando en las cargas de cada semana.
 
@@ -122,8 +133,9 @@ tiene, pensando en las cargas de cada semana.
 **Una fila por campaña y día.** Sin esto la tabla no tiene clave primaria: "C1004 el 4/9" podía ser
 dos o tres registros. Las filas repetidas de un mismo día tienen números muy distintos entre sí
 (8.905 contra 23.289 impresiones), así que se interpretan como **partes** del día —por ejemplo, grupos
-de anuncios— y se suman. La columna `source_rows` dice cuántas filas originales se unieron en cada una
-(su suma da 198).
+de anuncios— y se suman. En cambio, si dos filas son iguales en todo, son un **duplicado** y se
+descarta la copia. Comprobación: el gasto y las impresiones totales son los mismos antes y después
+de unir.
 
 **La clave es fecha + `campaign_id` + moneda.** La moneda está en la clave porque sumar dólares con
 pesos da un número sin sentido (hoy todo es USD). Nombre, canal, país y objetivo **no** están en la
@@ -184,17 +196,20 @@ vez de fallar más adelante con un error técnico. Los nombres de columna se ace
 espacios, y las columnas de más se ignoran con un aviso.
 
 **Un archivo roto no se publica.** Si no quedó ninguna fila válida o se descartó más del 20 % de las
-filas, el pipeline no toca el Sheet y la corrida termina con error: el Sheet conserva los datos de la
-corrida anterior, que siguen siendo correctos, y GitHub avisa por mail. Hoy se descarta el 7,5 %; el
-20 % deja margen para un mal día sin dejar pasar, por ejemplo, una columna entera mal exportada. Los
-CSV de `output/` se escriben igual, para ver qué se descartó y por qué.
+filas, el pipeline no toca el Sheet de resultados y la corrida termina con error: el Sheet conserva
+los datos de la corrida anterior, que siguen siendo correctos, y GitHub avisa por mail. Hoy se
+descarta el 5,6 %; el 20 % deja margen para un mal día sin dejar pasar, por ejemplo, una columna
+entera mal exportada. La revisión (descartadas y corregidas) se publica igual, porque es justo lo que
+hay que mirar para entender por qué frenó.
 
-**Las filas descartadas quedan registradas.** `rejected_rows.csv` guarda cada fila tal como venía, con
-su línea en el archivo original y el motivo (`valor negativo; más clicks que impresiones`,
-`duplicado exacto de la línea 6`). Cualquiera puede auditar qué se sacó sin confiar en el script a
-ciegas.
+**Lo que se descarta o corrige queda registrado, en un Sheet de revisión aparte.** `rejected_rows`
+guarda cada fila descartada tal como venía, con su línea en el archivo original y el motivo
+(`más clicks que impresiones`, `duplicado exacto de la línea 6`; si rompe varias reglas, aparecen
+todas). `corrected_rows` guarda cada fila corregida, tal como venía, con la corrección hecha.
+Cualquiera puede auditar qué se sacó o cambió sin confiar en el script a ciegas. Va en un Sheet
+aparte para que el de resultados tenga solo los datos que se usan.
 
-**Tests antes de publicar.** 51 tests cubren cada regla —lectura de números y fechas, canales,
+**Tests antes de publicar.** 52 tests cubren cada regla —lectura de números y fechas, canales,
 duplicados, inválidas, unión, clave primaria, monedas, métricas, resumen, control de calidad,
 publicación— más el archivo real de punta a punta. En GitHub Actions corren antes del pipeline: si una
 regla deja de cumplirse, la corrida frena y el Sheet no se toca. Para comprobar que los tests sirven,
@@ -218,6 +233,9 @@ muestra como porcentaje y los montos y el ROAS con dos decimales.
   pero el archivo no lo confirma: es lo primero que validaría con quien conoce la exportación.
 - **El formato `DD/MM/AAAA`** se asume día/mes porque hay fechas como `17/09` que no admiten otra
   lectura. Un archivo solo con fechas ambiguas (`05/09`) necesitaría confirmar el formato de origen.
+- **El gasto negativo es un error de signo.** Si fuera un reembolso o un ajuste, pasarlo a positivo
+  sumaría gasto que no existió; las 4 filas corregidas suman USD 2.085,86 y quedan listadas en
+  `corrected_rows` para validarlo.
 - **El umbral del 20 %** es un criterio, no un dato: se ajusta en una línea (`MAX_DISCARDED_SHARE`).
 
 ## Mejoras para escalar

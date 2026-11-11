@@ -20,16 +20,21 @@ log = logging.getLogger("pipeline")
 
 ROOT = Path(__file__).parent
 RAW_CSV = ROOT / "data" / "campaigns.csv"
-REJECTED_CSV = ROOT / "output" / "rejected_rows.csv"
-# Copias locales de lo que va a cada tab del Sheet, para revisar sin abrirlo.
+# Copias locales de lo que va a cada tab, para revisar sin abrir los Sheets.
 DAILY_CSV = ROOT / "output" / "campaigns_daily.csv"
 SUMMARY_CSV = ROOT / "output" / "campaign_summary.csv"
+REJECTED_CSV = ROOT / "output" / "rejected_rows.csv"
+CORRECTED_CSV = ROOT / "output" / "corrected_rows.csv"
 
+# Sheet de resultados (SPREADSHEET_ID)
 DAILY_TAB = "clean_data"
 SUMMARY_TAB = "campaign_summary"
+# Sheet de revisión (REVIEW_SPREADSHEET_ID): lo que la limpieza sacó o cambió, para auditarlo.
+REJECTED_TAB = "rejected_rows"
+CORRECTED_TAB = "corrected_rows"
 
 # Si la limpieza descarta más que esto, el archivo está roto y no se publica: el Sheet se queda con
-# los datos de la corrida anterior. Hoy se descarta el 7,5 %; el 20 % deja margen para un mal día
+# los datos de la corrida anterior. Hoy se descarta el 5,6 %; el 20 % deja margen para un mal día
 # sin dejar pasar un archivo con, por ejemplo, una columna entera mal exportada.
 MAX_DISCARDED_SHARE = 0.20
 
@@ -201,10 +206,25 @@ def duplicate_reasons(df: pd.DataFrame) -> pd.Series:
     return ("duplicado exacto de la línea " + first_line.astype(str)).where(copies)
 
 
-def clean(raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
-    """Devuelve la data limpia, las filas descartadas con su motivo y un reporte de conteos."""
+def correct_negative_spend(df: pd.DataFrame) -> pd.Series:
+    """Pasa a positivo el gasto negativo y devuelve, por línea, la corrección hecha.
+
+    Supuesto: el gasto no puede ser negativo, así que el signo es un error de carga y el monto es
+    correcto. Se corrige antes de buscar duplicados, así dos copias de la misma fila siguen siendo
+    iguales.
+    """
+    negative = df["spend"].lt(0).fillna(False)
+    corrections = "spend " + df.loc[negative, "spend"].astype(str) + " pasado a positivo"
+    df.loc[negative, "spend"] = df.loc[negative, "spend"].abs()
+    return corrections
+
+
+def clean(raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict]:
+    """Devuelve la data limpia, las filas descartadas con su motivo, las filas corregidas con la
+    corrección hecha y un reporte de conteos."""
     df = normalize(raw)
     report = {"filas leídas": len(df)}
+    corrections = correct_negative_spend(df)
 
     # Se comparan las filas ya normalizadas: así también se detecta un duplicado
     # que solo difiere en el formato de la fecha o en espacios.
@@ -228,7 +248,13 @@ def clean(raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     reason = pd.concat([duplicate.dropna(), invalid[invalid != ""]])
     rejected = raw.loc[reason.index].assign(reason=reason).sort_index()
     rejected = rejected.rename_axis("source_line").reset_index()
-    return df, rejected, report
+
+    # Solo las corregidas que siguieron: una corregida y después descartada figura en rejected.
+    kept = corrections[corrections.index.isin(df.index)]
+    report["gasto negativo pasado a positivo"] = len(kept)
+    corrected = raw.loc[kept.index].assign(correction=kept).sort_index()
+    corrected = corrected.rename_axis("source_line").reset_index()
+    return df, rejected, corrected, report
 
 
 def campaign_attributes(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
@@ -259,15 +285,14 @@ def merge_same_day(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     attrs, inconsistent = campaign_attributes(df)
     grouped = df.groupby(KEY_COLS, dropna=False)
     merged = grouped[NUMERIC_COLS].sum(skipna=False)
-    merged["source_rows"] = grouped.size()
     merged[MONEY_COLS] = merged[MONEY_COLS].round(2)  # 486.29999999999995 -> 486.3, ruido de sumar
     merged = merged.reset_index().join(attrs, on="campaign_id")
-    merged = merged[OUTPUT_ID_COLS + NUMERIC_COLS + ["source_rows"]]
+    merged = merged[OUTPUT_ID_COLS + NUMERIC_COLS]
 
     report = {
         "campañas con atributos inconsistentes": inconsistent,
         "filas por campaña y día": len(merged),
-        "de ellas, unidas de varias filas": int((merged["source_rows"] > 1).sum()),
+        "de ellas, unidas de varias filas": int((grouped.size() > 1).sum()),
         "con conversiones vacías tras unir": int(merged["conversions"].isna().sum()),
         "con revenue vacío tras unir": int(merged["revenue"].isna().sum()),
     }
@@ -435,6 +460,22 @@ def publish(daily: pd.DataFrame, summary: pd.DataFrame) -> str:
     return book.url
 
 
+def publish_review(rejected: pd.DataFrame, corrected: pd.DataFrame) -> str | None:
+    """Publica en un Sheet aparte lo que la limpieza descartó o corrigió, para revisarlo después.
+
+    Es opcional: sin REVIEW_SPREADSHEET_ID el pipeline funciona igual y la revisión queda en output/.
+    """
+    spreadsheet_id = os.environ.get("REVIEW_SPREADSHEET_ID")
+    if not spreadsheet_id:
+        log.info("Sin REVIEW_SPREADSHEET_ID: la revisión queda solo en output/")
+        return None
+    book = sheets_client().open_by_key(spreadsheet_id)
+    write_tab(book, REJECTED_TAB, rejected)
+    write_tab(book, CORRECTED_TAB, corrected)
+    log.info("Revisión publicada en %s", book.url)
+    return book.url
+
+
 class GitHubAnnotations(logging.Handler):
     """En GitHub Actions, los avisos y errores también aparecen como anotaciones en la página de la
     ejecución: un canal desconocido o un archivo rechazado se ven sin abrir el log."""
@@ -475,7 +516,7 @@ def main() -> None:
         log.error("No se publica: %s", bad_file)
         write_step_summary({}, f"❌ **No se publicó:** {bad_file}")
         raise SystemExit(1)
-    clean_df, rejected, report = clean(raw)
+    clean_df, rejected, corrected, report = clean(raw)
     daily, merge_report = merge_same_day(clean_df)
     report.update(merge_report)
     daily = add_metrics(daily)
@@ -486,19 +527,23 @@ def main() -> None:
     summary = summarize(daily)
 
     REJECTED_CSV.parent.mkdir(exist_ok=True)
-    daily.to_csv(DAILY_CSV, index=False, encoding="utf-8-sig")
-    summary.to_csv(SUMMARY_CSV, index=False, encoding="utf-8-sig")
-    rejected.to_csv(REJECTED_CSV, index=False, encoding="utf-8-sig")  # con BOM: Excel lee bien los acentos
-    log.info("Filas descartadas con su motivo: %s", REJECTED_CSV.relative_to(ROOT))
-    log.info("Data limpia con métricas: %s", DAILY_CSV.relative_to(ROOT))
-    log.info("Resumen por campaña: %s", SUMMARY_CSV.relative_to(ROOT))
+    outputs = {
+        DAILY_CSV: daily, SUMMARY_CSV: summary, REJECTED_CSV: rejected, CORRECTED_CSV: corrected,
+    }
+    for path, table in outputs.items():
+        table.to_csv(path, index=False, encoding="utf-8-sig")  # con BOM: Excel lee bien los acentos
+        log.info("Escrito %s", path.relative_to(ROOT))
+
+    # La revisión se publica antes del control: si el archivo está roto, es justo lo que hay que ver.
+    if not args.no_publish:
+        publish_review(rejected, corrected)
 
     # El control va después de escribir los CSV: si frena, igual quedan para ver qué pasó.
     problems = quality_gate(report)
     if problems:
         for problem in problems:
             log.error("No se publica: %s", problem)
-        log.error("El Sheet conserva los datos de la corrida anterior. Revisar %s", REJECTED_CSV.relative_to(ROOT))
+        log.error("El Sheet conserva los datos de la corrida anterior. Revisar las filas descartadas.")
         write_step_summary(report, "❌ **No se publicó:** " + "; ".join(problems) + ".")
         raise SystemExit(1)
 
