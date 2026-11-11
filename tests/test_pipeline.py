@@ -221,6 +221,33 @@ def test_summary_cpa_uses_only_the_spend_of_days_with_conversions(tmp_path):
     summary = p.summarize(p.add_metrics(daily))
     assert summary.loc[0, "spend"] == 400  # el total sigue siendo el total
     assert summary.loc[0, "cpa"] == 10  # 100 / 10, no 400 / 10
+    assert summary.loc[0, "spend_with_conversions"] == 100  # la base del CPA, a la vista
+
+
+def test_every_summary_metric_can_be_redone_from_visible_columns():
+    """Un analista tiene que poder rehacer cada métrica con las columnas de la tabla."""
+    clean, _, _, _ = p.clean(p.load_raw(CASE_CSV))
+    daily = p.add_metrics(p.merge_same_day(clean)[0])
+    for table, cpa_base, roas_base in [
+        (daily, "spend", "spend"),
+        (p.summarize(daily), "spend_with_conversions", "spend_with_revenue"),
+    ]:
+        pd.testing.assert_series_equal(
+            table["cpa"], p.safe_divide(table[cpa_base], table["conversions"]), check_names=False
+        )
+        pd.testing.assert_series_equal(
+            table["roas"], p.safe_divide(table["revenue"], table[roas_base]), check_names=False
+        )
+
+
+def test_dictionary_explains_every_published_column():
+    clean, _, _, _ = p.clean(p.load_raw(CASE_CSV))
+    daily = p.add_metrics(p.merge_same_day(clean)[0])
+    summary = p.summarize(daily)
+    documented = p.DICTIONARY
+    for tab, table in [(p.DAILY_TAB, daily), (p.SUMMARY_TAB, summary)]:
+        covered = set(documented.loc[documented["tab"].isin([tab, "las dos"]), "columna"])
+        assert set(table.columns) <= covered, f"{tab}: faltan {set(table.columns) - covered}"
 
 
 def test_summed_money_has_no_float_noise(tmp_path):

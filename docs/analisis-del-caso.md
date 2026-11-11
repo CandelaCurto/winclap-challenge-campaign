@@ -54,7 +54,11 @@ quedarían 9 conversiones sobre USD 2.564: un CPA de USD 284,8, falso pero con a
 de conversiones. Con los días que tienen el dato, el CPA da **USD 10,07**; dividiendo el gasto total
 daría USD 15,29, un 52 % peor por un dato que falta y no por la campaña.
 
-Parte del gasto usada en cada campaña con días sin dato:
+En `campaign_summary` se ve así: `spend` = 11.223,57, `spend_with_conversions` = 7.391,30,
+`conversions` = 734 y `cpa` = 7.391,30 / 734 = 10,07.
+
+Parte del gasto usada en cada campaña con días sin dato (`spend_with_conversions` y
+`spend_with_revenue` sobre `spend`):
 
 | Campaña | Gasto usado para el CPA | Gasto usado para el ROAS |
 |---|---|---|

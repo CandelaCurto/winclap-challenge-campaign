@@ -353,6 +353,9 @@ def summarize(daily: pd.DataFrame) -> pd.DataFrame:
     que tienen ese dato. Si no, el gasto de un día sin dato se dividiría por resultados de otros
     días y la métrica saldría peor de lo que es. Los totales de conversiones y revenue suman lo
     conocido; si una campaña no tiene ningún dato, quedan vacíos.
+
+    Ese gasto base queda en la tabla (spend_with_conversions, spend_with_revenue) para que quien
+    la use pueda rehacer cada métrica con columnas visibles, sin conocer esta regla.
     """
     # Los atributos ya son únicos por campaña (merge_same_day): agruparlos no parte ninguna fila.
     campaign_cols = [col for col in OUTPUT_ID_COLS if col != "date"]
@@ -381,7 +384,12 @@ def summarize(daily: pd.DataFrame) -> pd.DataFrame:
         )
 
     summary = add_metrics(totals, "spend_with_conversions", "spend_with_revenue")
-    return summary.drop(columns=["spend_with_conversions", "spend_with_revenue"])
+    # Cada base al lado de lo que divide: spend_with_conversions junto a conversions, etc.
+    order = campaign_cols + [
+        "impressions", "clicks", "spend",
+        "conversions", "spend_with_conversions", "revenue", "spend_with_revenue",
+    ] + METRIC_COLS
+    return summary[order]
 
 
 def quality_gate(report: dict) -> list[str]:
@@ -459,6 +467,8 @@ def write_tab(book: gspread.Spreadsheet, title: str, df: pd.DataFrame) -> None:
         "cpc": ("NUMBER", "#,##0.00"),
         "cpa": ("NUMBER", "#,##0.00"),
         "spend": ("NUMBER", "#,##0.00"),
+        "spend_with_conversions": ("NUMBER", "#,##0.00"),
+        "spend_with_revenue": ("NUMBER", "#,##0.00"),
         "revenue": ("NUMBER", "#,##0.00"),
         "roas": ("NUMBER", "0.00"),
     }
@@ -478,6 +488,44 @@ def write_tab(book: gspread.Spreadsheet, title: str, df: pd.DataFrame) -> None:
     log.info("Tab '%s' reemplazada: %d filas", title, len(df))
 
 
+# Qué es cada columna y cómo se calcula, publicado como una tab más: quien use el Sheet puede
+# entender y rehacer cada número sin conocer el código. Un test controla que no falte ninguna columna.
+DICTIONARY = pd.DataFrame(
+    [
+        ("las dos", "campaign_id", "Código único de la campaña", "Del archivo"),
+        ("las dos", "campaign_name", "Nombre: PAÍS_OBJETIVO_PLATAFORMA_PERÍODO", "Del archivo, sin espacios sobrantes. Si una campaña trae más de uno, el más frecuente"),
+        ("las dos", "channel", "Plataforma: Google Ads, Meta Ads o LinkedIn Ads", "Reconocida por palabra clave en el canal del archivo"),
+        ("las dos", "country", "País de la campaña", "Del archivo"),
+        ("las dos", "objective", "Objetivo: Awareness, Consideration o Conversion", "Del archivo"),
+        ("las dos", "currency", "Moneda de todos los montos de la fila", "Del archivo"),
+        (DAILY_TAB, "date", "Día", "Del archivo (acepta AAAA-MM-DD y DD/MM/AAAA)"),
+        (DAILY_TAB, "impressions", "Veces que se mostró el anuncio ese día", "Suma de las filas de esa campaña y día"),
+        (DAILY_TAB, "clicks", "Clicks del día", "Suma de las filas de esa campaña y día"),
+        (DAILY_TAB, "conversions", "Conversiones del día", "Suma de las filas de esa campaña y día. Vacío si alguna no tenía el dato"),
+        (DAILY_TAB, "spend", "Gasto del día", "Suma de las filas de esa campaña y día. Un gasto negativo se pasó a positivo (ver corrected_rows)"),
+        (DAILY_TAB, "revenue", "Ingresos del día", "Suma de las filas de esa campaña y día. Vacío si alguna no tenía el dato"),
+        (DAILY_TAB, "ctr", "Click-through rate: de cada 100 impresiones, cuántos clicks", "clicks / impressions"),
+        (DAILY_TAB, "cpc", "Costo por click", "spend / clicks"),
+        (DAILY_TAB, "cpa", "Costo por conversión", "spend / conversions. Vacío si no hubo conversiones o falta el dato"),
+        (DAILY_TAB, "roas", "Dólares que volvieron por cada dólar invertido", "revenue / spend. Vacío si falta el revenue"),
+        (SUMMARY_TAB, "impressions", "Impresiones de la campaña", "Suma de todos los días"),
+        (SUMMARY_TAB, "clicks", "Clicks de la campaña", "Suma de todos los días"),
+        (SUMMARY_TAB, "spend", "Gasto total de la campaña", "Suma de todos los días"),
+        (SUMMARY_TAB, "conversions", "Conversiones conocidas", "Suma de los días que tienen el dato"),
+        (SUMMARY_TAB, "spend_with_conversions", "Gasto de los días que tienen dato de conversiones: la base del CPA", "Suma del gasto de esos días. Igual a spend si no falta ningún día"),
+        (SUMMARY_TAB, "revenue", "Ingresos conocidos", "Suma de los días que tienen el dato"),
+        (SUMMARY_TAB, "spend_with_revenue", "Gasto de los días que tienen dato de revenue: la base del ROAS", "Suma del gasto de esos días. Igual a spend si no falta ningún día"),
+        (SUMMARY_TAB, "ctr", "Click-through rate de la campaña", "clicks / impressions, sobre los totales"),
+        (SUMMARY_TAB, "cpc", "Costo por click de la campaña", "spend / clicks, sobre los totales"),
+        (SUMMARY_TAB, "cpa", "Costo por conversión de la campaña", "spend_with_conversions / conversions: solo los días con dato, así el gasto de un día sin dato no empeora el CPA"),
+        (SUMMARY_TAB, "roas", "Retorno del gasto de la campaña", "revenue / spend_with_revenue: solo los días con dato"),
+        ("todas", "(celda vacía)", "No hay dato, o la métrica no se puede calcular (por ejemplo, dividir por 0)", "Nunca significa 0"),
+    ],
+    columns=["tab", "columna", "qué es", "cómo se calcula"],
+)
+DICTIONARY_TAB = "diccionario"
+
+
 def publish(daily: pd.DataFrame, summary: pd.DataFrame) -> str:
     spreadsheet_id = os.environ.get("SPREADSHEET_ID")
     if not spreadsheet_id:
@@ -485,6 +533,7 @@ def publish(daily: pd.DataFrame, summary: pd.DataFrame) -> str:
     book = sheets_client().open_by_key(spreadsheet_id)
     write_tab(book, DAILY_TAB, daily)
     write_tab(book, SUMMARY_TAB, summary)
+    write_tab(book, DICTIONARY_TAB, DICTIONARY)
     log.info("Publicado en %s", book.url)
     return book.url
 

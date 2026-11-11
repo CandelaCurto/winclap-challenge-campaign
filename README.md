@@ -10,6 +10,7 @@ Corre desde GitHub Actions al subir datos nuevos, a mano y todos los lunes a las
 |---|---|
 | `clean_data` | Data limpia: una fila por campaña y día, con sus métricas |
 | `campaign_summary` | Una fila por campaña: totales y métricas recalculadas sobre los totales |
+| `diccionario` | Qué es cada columna de las dos tabs y cómo se calcula, para usar el Sheet sin leer este README |
 
 **Revisión de la limpieza:** [Google Sheet (lectura)](https://docs.google.com/spreadsheets/d/1riiICt4jCo14nDha1lX9h72UQN_Sf_pY5PiILsG72cw/edit)
 
@@ -165,9 +166,18 @@ promedio le da el mismo peso a un día de USD 10 que a uno de USD 1.000.
 **En el resumen, CPA y ROAS usan solo los días que tienen el dato.** Si una campaña tiene días con
 conversiones vacías, dividir el gasto total por las conversiones conocidas contaría el gasto de esos
 días como si no hubiera traído nada, y el CPA saldría peor por un dato que falta. Por eso el CPA usa
-el gasto de los días con conversiones conocidas, y el ROAS el de los días con revenue conocido. En esas
-campañas `spend / conversions` de la tabla no da exactamente el `cpa` mostrado, porque `spend` es el
-total; el log de cada corrida dice qué parte del gasto se usó.
+el gasto de los días con conversiones conocidas, y el ROAS el de los días con revenue conocido.
+
+**Esa base está a la vista.** El resumen tiene dos columnas más, `spend_with_conversions` (la base del
+CPA) y `spend_with_revenue` (la base del ROAS), al lado de lo que dividen:
+
+- `cpa = spend_with_conversions / conversions`
+- `roas = revenue / spend_with_revenue`
+
+Así cualquier analista puede rehacer cada métrica con las columnas de la tabla, sin conocer esta
+regla. En las campañas sin días faltantes, las dos bases son iguales a `spend`; donde son menores,
+muestran cuánto gasto quedó sin dato. La tab `diccionario` lo explica junto con el resto de las
+columnas, y un test controla que ninguna columna publicada quede sin explicar.
 
 **El objetivo de la campaña sirve para leer las métricas, no para calcularlas.** Una campaña de
 Awareness no se juzga por su CPA, pero el CPA se calcula igual que en las demás: si la regla cambiara
