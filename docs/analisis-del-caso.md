@@ -48,7 +48,7 @@ Comprobación de la unión: el gasto y las impresiones totales son los mismos an
 
 ## Casos que muestran por qué cada regla
 
-**Lo que cuesta descartar las filas con datos vacíos.** 11 filas se descartaron solo por tener
+**Lo que cuesta es descartar las filas con datos vacíos.** 11 filas se descartaron solo por tener
 conversiones o revenue vacíos. Sus impresiones, clicks y gasto eran válidos y se pierden con ellas:
 suman **USD 11.254,61, el 6,6 % del gasto** del archivo. Por ejemplo, C1004 el 4/9 tenía dos filas:
 una de USD 288,06 con 9 conversiones y otra de USD 2.275,52 sin conversiones. Queda solo la primera,
