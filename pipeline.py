@@ -7,6 +7,7 @@ Uso: python pipeline.py [--no-publish]
 """
 
 import argparse
+import io
 import json
 import logging
 import os
@@ -37,6 +38,10 @@ CORRECTED_TAB = "corrected_rows"
 # los datos de la corrida anterior. Hoy se descarta el 5,6 %; el 20 % deja margen para un mal día
 # sin dejar pasar un archivo con, por ejemplo, una columna entera mal exportada.
 MAX_DISCARDED_SHARE = 0.20
+# Lo mismo para las correcciones: unas pocas son errores de carga, pero si hay que corregir muchas
+# es que cambió cómo exporta la plataforma (por ejemplo, el gasto en negativo) y alguien tiene que
+# mirarlo antes de publicar. Hoy se corrige el 1,9 %.
+MAX_CORRECTED_SHARE = 0.20
 
 RAW_COLS = [
     "date", "campaign_id", "campaign_name", "channel", "country", "objective",
@@ -67,12 +72,26 @@ CHANNEL_KEYWORDS = {
 
 def load_raw(path: Path) -> pd.DataFrame:
     """Lee el CSV y controla su forma antes de seguir: si no es el archivo esperado, frena con un
-    mensaje que dice qué falta, en vez de fallar más adelante con un error que no se entiende."""
+    mensaje que dice qué falta, en vez de fallar más adelante con un error que no se entiende.
+
+    Acepta las dos exportaciones más comunes: separado por coma o por punto y coma (Excel en
+    español), y codificado en UTF-8 o en Latin-1 (Excel en Windows).
+    """
+    content = path.read_bytes()
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = content.decode("latin-1")
+        log.warning("%s no está en UTF-8: se lee como Latin-1", path.name)
+    header = text.split("\n", 1)[0]
+    separator = ";" if header.count(";") > header.count(",") else ","
     try:
         # Todo se lee como texto: cada tipo se convierte de forma explícita en normalize().
-        raw = pd.read_csv(path, dtype=str, keep_default_na=False)
+        raw = pd.read_csv(io.StringIO(text), sep=separator, dtype=str, keep_default_na=False)
     except pd.errors.EmptyDataError:
         raise SystemExit(f"{path.name} está vacío: no tiene ni el encabezado.")
+    except pd.errors.ParserError as error:
+        raise SystemExit(f"{path.name} no se puede leer como CSV: {error}")
     raw.columns = raw.columns.str.strip().str.lower()  # 'Spend ' es la misma columna que 'spend'
 
     missing = [col for col in RAW_COLS if col not in raw.columns]
@@ -191,6 +210,8 @@ def invalid_reasons(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(
         {
             "fecha ilegible": df["date"].isna(),
+            # Un día que todavía no pasó no puede tener performance: es un error de tipeo (2062).
+            "fecha futura": df["date"] > pd.Timestamp.today().normalize(),
             "sin impresiones, clicks o gasto": df[["impressions", "clicks", "spend"]].isna().any(axis=1),
             "valor negativo": (df[NUMERIC_COLS] < 0).any(axis=1),
             "más clicks que impresiones": df["clicks"] > df["impressions"],
@@ -368,13 +389,21 @@ def quality_gate(report: dict) -> list[str]:
     read, valid = report["filas leídas"], report["filas válidas"]
     if valid == 0:
         return [f"no quedó ninguna fila válida de {read} leídas"]
+    problems = []
     discarded = (read - valid) / read
     if discarded > MAX_DISCARDED_SHARE:
-        return [
+        problems.append(
             f"se descartó el {discarded:.0%} de las filas ({read - valid} de {read}), "
             f"más que el máximo de {MAX_DISCARDED_SHARE:.0%}"
-        ]
-    return []
+        )
+    corrected = report.get("gasto negativo pasado a positivo", 0)
+    if corrected / read > MAX_CORRECTED_SHARE:
+        problems.append(
+            f"se corrigió el gasto negativo en el {corrected / read:.0%} de las filas "
+            f"({corrected} de {read}), más que el máximo de {MAX_CORRECTED_SHARE:.0%}: "
+            f"puede haber cambiado cómo exporta la plataforma"
+        )
+    return problems
 
 
 def sheets_client() -> gspread.Client:

@@ -25,7 +25,7 @@ data/campaigns.csv → validar → limpiar → unir por campaña y día → mét
 | `pipeline.py` | Todo el pipeline, en funciones chicas en el orden de arriba |
 | `data/campaigns.csv` | El CSV original del caso, sin tocar |
 | `requirements.txt` | Dependencias con versión fija (pandas, gspread, google-auth) |
-| `requirements-dev.txt`, `pytest.ini`, `tests/` | Los tests de cada regla y lo necesario para correrlos |
+| `requirements-dev.txt`, `pytest.ini`, `tests/` | Los tests de cada regla y lo necesario para correrlos. `tests/fixtures/` tiene una copia fija del CSV del caso |
 | `.python-version` | Python 3.14, la misma versión en local y en GitHub Actions |
 | `.github/workflows/pipeline.yml` | La ejecución en GitHub Actions |
 
@@ -41,7 +41,7 @@ python -m venv .venv
 source .venv/bin/activate          # en Windows: .venv\Scripts\activate
 pip install -r requirements-dev.txt
 
-python -m pytest                   # 52 tests: no publican nada ni necesitan credenciales
+python -m pytest                   # 55 tests: no publican nada ni necesitan credenciales
 python pipeline.py --no-publish    # procesa data/campaigns.csv y deja el resultado en output/
 python pipeline.py --input otro.csv --no-publish
 ```
@@ -63,8 +63,8 @@ Cada corrida **reemplaza** el contenido de las dos tabs: correrla dos veces no d
 
 ### En GitHub Actions
 
-- **Cuándo corre:** a mano (*Actions → Pipeline de campañas → Run workflow*) y todos los lunes a las
-  9:00 de Argentina.
+- **Cuándo corre:** al subir un CSV nuevo a `data/`, a mano (*Actions → Pipeline de campañas → Run
+  workflow*) y todos los lunes a las 9:00 de Argentina.
 - **Qué hace:** instala las dependencias, corre los tests y, **solo si pasan**, el pipeline. Una
   corrida a la vez, con un máximo de 10 minutos.
 - **Qué deja:** el reporte de la corrida como tabla en la página de la ejecución, los avisos como
@@ -73,6 +73,28 @@ Cada corrida **reemplaza** el contenido de las dos tabs: correrla dos veces no d
   Los IDs de los dos Sheets están en el workflow.
 - GitHub desactiva los workflows programados de un repo público tras 60 días sin actividad; se
   reactivan con un click en la pestaña Actions.
+
+### Cómo actualizar los datos
+
+El pipeline lee siempre `data/campaigns.csv`. Para procesar datos nuevos, se reemplaza ese archivo
+**con el mismo nombre**:
+
+- **Desde la web de GitHub:** carpeta `data` → *Add file → Upload files* → arrastrar el CSV nuevo
+  llamado `campaigns.csv` → *Commit changes*.
+- **Desde git:** copiar el archivo en `data/campaigns.csv`, commit y push a `main`.
+
+Al llegar el archivo nuevo, el workflow corre solo: tests, pipeline y publicación, en menos de un
+minuto. Si el archivo está roto, la corrida termina en rojo con el motivo, el Sheet de resultados
+conserva los datos anteriores y el Sheet de revisión muestra qué se descartó o corrigió.
+
+**Supuesto:** cada CSV trae el **histórico completo** de las campañas, no solo los días nuevos, como
+el archivo del caso. Por eso cada corrida reemplaza el contenido de los Sheets. Si el archivo trajera
+solo la última semana, habría que acumular los archivos y combinarlos por fecha y campaña (ver
+"Mejoras para escalar").
+
+Se aceptan las dos exportaciones más comunes: separado por coma o por punto y coma (Excel en
+español), y codificado en UTF-8 o en Latin-1 (Excel en Windows). Las columnas tienen que tener los
+mismos nombres; el orden, las mayúsculas y las columnas de más no importan.
 
 ## Problemas encontrados en los datos
 
@@ -125,7 +147,8 @@ se pueda revisar. Se corrige antes de buscar duplicados, así dos copias de la m
 siendo iguales.
 
 **Se descarta lo imposible, no lo raro.** Más clicks que impresiones (un click requiere una
-impresión), impresiones, clicks, conversiones o revenue negativos, fecha ilegible o falta de
+impresión), impresiones, clicks, conversiones o revenue negativos, fecha ilegible, fecha futura (un
+día que todavía no pasó no puede tener performance: `2062-09-17` es un error de tipeo) o falta de
 impresiones, clicks o gasto. Una cantidad con decimales (12,5 clicks) queda
 vacía con un aviso en vez de redondearse a escondidas. Las reglas cubren casos que este archivo no
 tiene, pensando en las cargas de cada semana.
@@ -201,8 +224,11 @@ espacios, y las columnas de más se ignoran con un aviso.
 filas, el pipeline no toca el Sheet de resultados y la corrida termina con error: el Sheet conserva
 los datos de la corrida anterior, que siguen siendo correctos, y GitHub avisa por mail. Hoy se
 descarta el 5,6 %; el 20 % deja margen para un mal día sin dejar pasar, por ejemplo, una columna
-entera mal exportada. La revisión (descartadas y corregidas) se publica igual, porque es justo lo que
-hay que mirar para entender por qué frenó.
+entera mal exportada. Lo mismo si hay que **corregir** el gasto en más del 20 % de las filas (hoy el
+1,9 %): unas pocas correcciones son errores de carga, pero muchas indican que cambió cómo exporta la
+plataforma, y pasarlas todas a positivo sin que nadie lo mire sería peligroso. La revisión
+(descartadas y corregidas) se publica igual, porque es justo lo que hay que mirar para entender por
+qué frenó.
 
 **Lo que se descarta o corrige queda registrado, en un Sheet de revisión aparte.** `rejected_rows`
 guarda cada fila descartada tal como venía, con su línea en el archivo original y el motivo
@@ -211,9 +237,12 @@ todas). `corrected_rows` guarda cada fila corregida, tal como venía, con la cor
 Cualquiera puede auditar qué se sacó o cambió sin confiar en el script a ciegas. Va en un Sheet
 aparte para que el de resultados tenga solo los datos que se usan.
 
-**Tests antes de publicar.** 52 tests cubren cada regla —lectura de números y fechas, canales,
+**Tests antes de publicar.** 55 tests cubren cada regla —lectura de números y fechas, canales,
 duplicados, inválidas, unión, clave primaria, monedas, métricas, resumen, control de calidad,
-publicación— más el archivo real de punta a punta. En GitHub Actions corren antes del pipeline: si una
+publicación— más el archivo del caso de punta a punta. Usan una **copia fija** del CSV del caso
+(`tests/fixtures/`), no `data/campaigns.csv`: ese archivo se reemplaza y sus números cambian, y un test
+atado a él frenaría el pipeline con cada archivo nuevo. Los tests prueban las reglas; el control de
+calidad prueba el archivo de cada semana. En GitHub Actions corren antes del pipeline: si una
 regla deja de cumplirse, la corrida frena y el Sheet no se toca. Para comprobar que los tests sirven,
 se rompió a propósito cada regla principal y los tests fallaron en todos los casos.
 
@@ -242,10 +271,13 @@ muestra como porcentaje y los montos y el ROAS con dos decimales.
 
 ## Mejoras para escalar
 
-**La fuente de datos.** El pipeline lee el CSV del repo, así que la corrida semanal vuelve a publicar
-el mismo archivo. Es lo que pide el caso; en producción la entrada sería dinámica: un archivo nuevo en
-una carpeta de Google Drive o, mejor, la API de cada plataforma (Google Ads, Meta, LinkedIn). Solo
-cambiaría `load_raw`; el resto ya está preparado para datos nuevos cada semana.
+**La fuente de datos.** Hoy alguien sube el CSV al repo. En producción la entrada sería automática:
+un archivo nuevo en una carpeta de Google Drive o, mejor, la API de cada plataforma (Google Ads, Meta,
+LinkedIn). Solo cambiaría `load_raw`; el resto ya está preparado para datos nuevos cada semana.
+
+**Archivos incrementales.** Si las plataformas exportaran solo los días nuevos en vez del histórico,
+guardaría cada archivo y los combinaría por fecha y campaña, quedándome con la versión más reciente de
+cada día, en vez de reemplazar todo.
 
 **Publicación atómica.** Hoy cada tab se borra y después se escribe. Si la conexión con Google se
 corta justo en el medio, la tab puede quedar vacía o a medias hasta la próxima corrida. Con un Sheet

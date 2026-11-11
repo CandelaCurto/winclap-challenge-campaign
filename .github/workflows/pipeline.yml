@@ -2,6 +2,9 @@ name: Pipeline de campañas
 
 on:
   workflow_dispatch: # botón "Run workflow" en la pestaña Actions
+  push: # al subir un CSV nuevo, se publica en el momento sin esperar al lunes
+    branches: [main]
+    paths: ["data/**"]
   schedule:
     - cron: "0 12 * * 1" # lunes 12:00 UTC = 9:00 en Argentina
 

@@ -3,6 +3,8 @@
 Uso: python -m pytest
 """
 
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
@@ -319,10 +321,39 @@ def test_step_summary_explains_a_file_with_the_wrong_shape(tmp_path, monkeypatch
     assert "le faltan columnas: ['spend']" in summary.read_text(encoding="utf-8")
 
 
-# --- El archivo real del caso --------------------------------------------------------------------
+# --- CSVs nuevos: lo que puede cambiar de una semana a otra --------------------------------------
 
-def test_real_file_end_to_end():
-    clean, rejected, corrected, report = p.clean(p.load_raw(p.RAW_CSV))
+def test_excel_export_with_semicolons_and_latin1_is_read(tmp_path):
+    path = tmp_path / "campaigns.csv"
+    data_row = row(name="AR_CONV_Ñandú_Meta_Q4", spend="SPEND").replace(",", ";").replace("SPEND", "182,41")
+    path.write_bytes((HEADER.replace(",", ";") + "\n" + data_row + "\n").encode("latin-1"))
+    raw = p.load_raw(path)
+    assert list(raw.columns) == p.RAW_COLS
+    assert raw.loc[2, "campaign_name"] == "AR_CONV_Ñandú_Meta_Q4"
+    assert p.to_number(raw.loc[2, "spend"]) == 182.41
+
+
+def test_future_date_is_rejected(tmp_path):
+    clean, rejected, _ = run_clean(tmp_path, row(), row(date="2062-09-17"))
+    assert len(clean) == 1 and rejected.loc[0, "reason"] == "fecha futura"
+
+
+def test_gate_stops_when_too_many_rows_need_correcting():
+    report = {"filas leídas": 214, "filas válidas": 202, "gasto negativo pasado a positivo": 202}
+    assert "puede haber cambiado cómo exporta la plataforma" in p.quality_gate(report)[0]
+    report["gasto negativo pasado a positivo"] = 4
+    assert p.quality_gate(report) == []
+
+
+# --- El archivo del caso -------------------------------------------------------------------------
+
+# Una copia fija del CSV que entregó Winclap, no data/campaigns.csv: ese archivo se reemplaza cada
+# semana y sus números cambian. Los tests prueban las reglas; el control de calidad, cada archivo.
+CASE_CSV = Path(__file__).parent / "fixtures" / "campaigns_case.csv"
+
+
+def test_case_file_end_to_end():
+    clean, rejected, corrected, report = p.clean(p.load_raw(CASE_CSV))
     daily, _ = p.merge_same_day(clean)
     summary = p.summarize(p.add_metrics(daily))
 
