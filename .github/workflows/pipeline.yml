@@ -37,7 +37,8 @@ jobs:
         run: python pipeline.py
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
-          SPREADSHEET_ID: 1fSj01Pwtsq3kPatY8jxhsvIrMPL7OUkeMafvnGNybZ8
+          SPREADSHEET_ID: 1fSj01Pwtsq3kPatY8jxhsvIrMPL7OUkeMafvnGNybZ8 # resultados
+          REVIEW_SPREADSHEET_ID: 1riiICt4jCo14nDha1lX9h72UQN_Sf_pY5PiILsG72cw # descartadas y corregidas
 
       # Las tablas generadas y las filas descartadas con su motivo, como adjunto de la ejecución.
       - uses: actions/upload-artifact@v7

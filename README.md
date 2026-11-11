@@ -6,6 +6,8 @@ Corre desde GitHub Actions a mano y todos los lunes.
 
 **Resultado publicado:** [Google Sheet (lectura)](https://docs.google.com/spreadsheets/d/1fSj01Pwtsq3kPatY8jxhsvIrMPL7OUkeMafvnGNybZ8/edit)
 
+**Revisión de la limpieza:** [Google Sheet (lectura)](https://docs.google.com/spreadsheets/d/1riiICt4jCo14nDha1lX9h72UQN_Sf_pY5PiILsG72cw/edit), con `rejected_rows` (filas descartadas y su motivo) y `corrected_rows` (filas corregidas y la corrección).
+
 | Tab | Contenido |
 |---|---|
 | `clean_data` | Data limpia: una fila por campaña y día, con sus métricas |
@@ -68,7 +70,7 @@ Cada corrida **reemplaza** el contenido de las dos tabs: correrla dos veces no d
 - **Qué deja:** el reporte de la corrida como tabla en la página de la ejecución, los avisos como
   anotaciones, y `output/` como adjunto descargable.
 - **Configuración:** el secreto `GOOGLE_CREDENTIALS` en *Settings → Secrets and variables → Actions*.
-  El ID del Sheet está en el workflow.
+  Los IDs de los dos Sheets están en el workflow.
 - GitHub desactiva los workflows programados de un repo público tras 60 días sin actividad; se
   reactivan con un click en la pestaña Actions.
 
