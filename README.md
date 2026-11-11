@@ -212,10 +212,9 @@ según el objetivo, la misma columna significaría cosas distintas según la fil
 
 ## Supuestos y riesgos
 
-- **Descartar la fila entera pierde también sus datos completos.** Una fila sin conversiones tiene
-  impresiones, clicks y gasto válidos, y se pierden con ella: el gasto total publicado es menor que el
-  real. Se eligió así para que la regla sea igual para cualquier columna y todo lo publicado esté
-  completo y se pueda verificar. Las filas descartadas, con su gasto, quedan en `rejected_rows`.
+- **Los totales publicados quedan por debajo de los reales**, porque las filas con algún vacío se
+  descartan con sus datos buenos (ver "Una fila con algún número vacío se descarta"). Las filas
+  descartadas, con su gasto, quedan en `rejected_rows`.
 - **Cada CSV trae el histórico completo**, no solo los días nuevos. Por eso cada corrida reemplaza el
   contenido de los Sheets.
 - **Las filas distintas de un mismo día son partes, no correcciones.** Si fueran versiones corregidas
