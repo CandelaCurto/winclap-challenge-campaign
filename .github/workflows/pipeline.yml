@@ -1,0 +1,47 @@
+name: Pipeline de campañas
+
+on:
+  workflow_dispatch: # botón "Run workflow" en la pestaña Actions
+  schedule:
+    - cron: "0 12 * * 1" # lunes 12:00 UTC = 9:00 en Argentina
+
+permissions:
+  contents: read
+
+# Una corrida a la vez: si la manual y la semanal coinciden, la segunda espera a que termine la
+# primera en vez de escribir el Sheet al mismo tiempo.
+concurrency:
+  group: pipeline
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-24.04 # versión fija: un cambio de sistema no llega sin aviso
+    timeout-minutes: 10 # hoy tarda menos de un minuto; si algo se cuelga, no corre 6 horas
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version-file: .python-version # la misma versión que en local
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - run: pip install -r requirements-dev.txt
+
+      # Si alguna regla dejó de cumplirse, la corrida frena acá y el Sheet no se toca.
+      - name: Tests
+        run: python -m pytest
+
+      - name: Limpiar, calcular y publicar en Google Sheets
+        run: python pipeline.py
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          SPREADSHEET_ID: 1fSj01Pwtsq3kPatY8jxhsvIrMPL7OUkeMafvnGNybZ8
+
+      # Las tablas generadas y las filas descartadas con su motivo, como adjunto de la ejecución.
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: pipeline-output
+          path: output/

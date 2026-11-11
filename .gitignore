@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+*.pyc
+# Credenciales de Google: nunca al repo
+*.json
+.env
+output/
