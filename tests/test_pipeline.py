@@ -240,6 +240,15 @@ def test_every_summary_metric_can_be_redone_from_visible_columns():
         )
 
 
+def test_every_published_numeric_column_has_an_explicit_format():
+    """Sin formato propio, una columna heredaría el de la que antes ocupaba su lugar en el Sheet."""
+    clean, rejected, corrected, _ = p.clean(p.load_raw(CASE_CSV))
+    daily = p.add_metrics(p.merge_same_day(clean)[0])
+    for table in [daily, p.summarize(daily), rejected, corrected]:
+        numeric = table.select_dtypes(include=["number", "datetime"]).columns
+        assert set(numeric) <= set(p.SHEET_FORMATS), set(numeric) - set(p.SHEET_FORMATS)
+
+
 def test_dictionary_explains_every_published_column():
     clean, _, _, _ = p.clean(p.load_raw(CASE_CSV))
     daily = p.add_metrics(p.merge_same_day(clean)[0])

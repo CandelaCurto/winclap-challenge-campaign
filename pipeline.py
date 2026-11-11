@@ -429,6 +429,26 @@ def sheets_client() -> gspread.Client:
 
 SHEETS_EPOCH = pd.Timestamp("1899-12-30")  # el día 0 de Google Sheets
 
+# Formato de presentación: el dato se guarda con todos sus decimales. Los montos van sin símbolo:
+# "$" se confunde con pesos, y la moneda de cada fila ya está en la columna currency.
+# Toda columna numérica publicada tiene que estar acá (lo controla un test): borrar una tab no borra
+# el formato de sus celdas, y si una columna cambia de lugar heredaría el formato de la anterior.
+SHEET_FORMATS = {
+    "date": ("DATE", "yyyy-mm-dd"),
+    "impressions": ("NUMBER", "#,##0"),
+    "clicks": ("NUMBER", "#,##0"),
+    "conversions": ("NUMBER", "#,##0"),
+    "spend": ("NUMBER", "#,##0.00"),
+    "spend_with_conversions": ("NUMBER", "#,##0.00"),
+    "revenue": ("NUMBER", "#,##0.00"),
+    "spend_with_revenue": ("NUMBER", "#,##0.00"),
+    "ctr": ("NUMBER", "0.00%"),
+    "cpc": ("NUMBER", "#,##0.00"),
+    "cpa": ("NUMBER", "#,##0.00"),
+    "roas": ("NUMBER", "0.00"),
+    "source_line": ("NUMBER", "0"),
+}
+
 
 def to_sheet_values(df: pd.DataFrame) -> list[list]:
     """Encabezado + filas, para escribir tal cual (sin que Sheets interprete nada).
@@ -459,19 +479,7 @@ def write_tab(book: gspread.Spreadsheet, title: str, df: pd.DataFrame) -> None:
     # alguien lo tipeara: un nombre que empieza con "=" se ejecutaría como fórmula.
     sheet.update(to_sheet_values(df), "A1", value_input_option="RAW")
 
-    # Formato de presentación: el dato se guarda con todos sus decimales. Los montos van sin
-    # símbolo: "$" se confunde con pesos, y la moneda de cada fila ya está en la columna currency.
-    formats = {
-        "date": ("DATE", "yyyy-mm-dd"),
-        "ctr": ("NUMBER", "0.00%"),
-        "cpc": ("NUMBER", "#,##0.00"),
-        "cpa": ("NUMBER", "#,##0.00"),
-        "spend": ("NUMBER", "#,##0.00"),
-        "spend_with_conversions": ("NUMBER", "#,##0.00"),
-        "spend_with_revenue": ("NUMBER", "#,##0.00"),
-        "revenue": ("NUMBER", "#,##0.00"),
-        "roas": ("NUMBER", "0.00"),
-    }
+    formats = SHEET_FORMATS
     last = len(df) + 1
     sheet.batch_format(
         [{"range": "1:1", "format": {"textFormat": {"bold": True}}}]
