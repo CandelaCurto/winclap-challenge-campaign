@@ -252,16 +252,6 @@ def test_every_published_numeric_column_has_an_explicit_format():
         assert set(numeric) <= set(p.SHEET_FORMATS), set(numeric) - set(p.SHEET_FORMATS)
 
 
-def test_dictionary_explains_every_published_column():
-    clean, _, _, _ = p.clean(p.load_raw(CASE_CSV))
-    daily = p.add_metrics(p.merge_same_day(clean)[0])
-    summary = p.summarize(daily)
-    documented = p.DICTIONARY
-    for tab, table in [(p.DAILY_TAB, daily), (p.SUMMARY_TAB, summary)]:
-        covered = set(documented.loc[documented["tab"].isin([tab, "las dos"]), "columna"])
-        assert set(table.columns) <= covered, f"{tab}: faltan {set(table.columns) - covered}"
-
-
 def test_summed_money_has_no_float_noise(tmp_path):
     clean, _, _ = run_clean(tmp_path, row(spend="0.1"), row(spend="0.2"))
     daily, _ = p.merge_same_day(clean)

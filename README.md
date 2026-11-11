@@ -10,7 +10,6 @@ Corre desde GitHub Actions al subir datos nuevos, a mano y todos los lunes a las
 |---|---|
 | `clean_data` | Data limpia: una fila por campaña y día, con sus métricas |
 | `campaign_summary` | Una fila por campaña: totales y métricas recalculadas sobre los totales |
-| `diccionario` | Qué es cada columna de las dos tabs y cómo se calcula, para usar el Sheet sin leer este README |
 
 **Revisión de la limpieza:** [Google Sheet (lectura)](https://docs.google.com/spreadsheets/d/1riiICt4jCo14nDha1lX9h72UQN_Sf_pY5PiILsG72cw/edit)
 
@@ -21,6 +20,9 @@ Corre desde GitHub Actions al subir datos nuevos, a mano y todos los lunes a las
 
 **Análisis del archivo del caso:** qué problemas tenía el CSV entregado, cuántas filas afectó cada uno
 y los números de esta carga, en [docs/analisis-del-caso.md](docs/analisis-del-caso.md).
+
+**Diccionario de datos:** qué es cada columna publicada y cómo se calcula, en
+[docs/diccionario.md](docs/diccionario.md).
 
 ## Cómo funciona
 
@@ -47,6 +49,7 @@ data/campaigns.csv → validar → limpiar → unir por campaña y día → mét
 | `.python-version` | Python 3.14, la misma versión en local y en GitHub Actions |
 | `.github/workflows/pipeline.yml` | La ejecución en GitHub Actions |
 | `docs/analisis-del-caso.md` | Los problemas del archivo del caso y sus números |
+| `docs/diccionario.md` | Qué es cada columna publicada y cómo se calcula |
 
 Cada corrida genera además `output/` (no se versiona): las tablas en CSV, `rejected_rows.csv` y
 `corrected_rows.csv`.
@@ -108,12 +111,34 @@ mayúsculas y las columnas de más no importan.
 
 ## Reglas de limpieza
 
-**Una fila con algún número vacío se descarta.** Un 0 es un dato ("medimos y no hubo"); un vacío es
-su falta ("no sabemos"), y convertirlo en 0 inventaría un dato. Si a una fila le falta cualquiera de
-sus números (impresiones, clicks, gasto, conversiones o revenue), se descarta entera y el motivo dice
-qué columna faltaba (`conversions vacío`). La regla es la misma para cualquier columna, así no
-depende de qué dato falte en cada archivo, y todo lo que queda está completo: cada métrica se puede
-calcular y rehacer con las columnas de la misma fila.
+### Una fila con algún número vacío se descarta
+
+Si a una fila le falta cualquiera de sus números (impresiones, clicks, gasto, conversiones o revenue),
+se descarta entera y el motivo dice qué columna faltaba (`conversions vacío`). Antes de llegar a esta
+regla se probaron otras; estas son las razones por las que se eligió:
+
+1. **Vacío no es cero, y no se puede rellenar.** Un 0 es un dato ("medimos y no hubo"); un vacío es su
+   falta ("no sabemos"). Convertirlo en 0 inventaría un dato: diría que esas conversiones no
+   existieron.
+2. **Una fila incompleta contamina los totales.** Si se conserva una fila con gasto pero sin
+   conversiones, al sumar la campaña el gasto cuenta entero y las conversiones solo en parte: el CPA
+   sale peor por un dato que falta, no por la campaña. Mantener esas filas obliga a una regla especial
+   (calcular el CPA solo con los días que tienen el dato), y entonces `spend / conversions` de la tabla
+   ya no da el `cpa` mostrado: un analista que no conoce la regla lo lee como un error.
+3. **Lo publicado se puede verificar sin conocer reglas.** Con todas las filas completas, cada métrica
+   se rehace con las columnas de la misma fila (`cpa = spend / conversions`), en el día y en el
+   resumen.
+4. **La regla escala.** Es la misma para cualquier columna numérica: no depende de qué dato venga
+   vacío en este archivo (hoy, conversiones y revenue; mañana puede ser otro).
+5. **No se pierde de vista.** Cada fila descartada queda en `rejected_rows`, tal como venía y con el
+   motivo, y si se descarta demasiado (más del 20 %) el pipeline no publica.
+
+**El costo:** junto con el dato que falta se pierden los que estaban bien en esa fila (sus
+impresiones, clicks y gasto), así que los totales publicados quedan por debajo de los reales. Para un
+análisis de eficiencia (CTR, CPC, CPA, ROAS) se prefirió datos completos y verificables a totales
+completos con métricas sesgadas. En "Mejoras para escalar" hay alternativas para recuperar esos datos.
+
+### El resto de las reglas
 
 | Situación | Qué hace | Por qué |
 |---|---|---|
@@ -162,8 +187,7 @@ volvió nada). Es el único vacío que queda en los datos publicados, y la fila 
 **El resumen recalcula las métricas sobre los totales**, nunca promediando las de cada día: el
 promedio le da el mismo peso a un día de USD 10 que a uno de USD 1.000. Como no hay números vacíos,
 cada métrica se rehace con las columnas de la misma fila (`cpa = spend / conversions`), sin conocer
-ninguna regla. La tab `diccionario` explica cada columna, y un test controla que ninguna columna
-publicada quede sin explicar.
+ninguna regla. El [diccionario](docs/diccionario.md) explica cada columna.
 
 **El objetivo de la campaña sirve para leer las métricas, no para calcularlas.** Una campaña de
 Awareness no se juzga por su CPA, pero el CPA se calcula igual que en las demás: si la regla cambiara
@@ -205,6 +229,24 @@ según el objetivo, la misma columna significaría cosas distintas según la fil
   (`MAX_DISCARDED_SHARE`, `MAX_CORRECTED_SHARE`).
 
 ## Mejoras para escalar
+
+**Recuperar los datos de las filas con vacíos.** Hoy se descartan enteras (ver "Una fila con algún
+número vacío se descarta"). Alternativas para no perder sus datos buenos, de menor a mayor esfuerzo:
+
+- **Columnas de base para cada métrica:** conservar todas las filas y agregar al resumen
+  `spend_with_conversions` y `spend_with_revenue`, el gasto de los días que sí tienen ese dato. El
+  gasto total queda completo y cada métrica sigue verificable a la vista
+  (`cpa = spend_with_conversions / conversions`), a costa de dos columnas que hay que explicar.
+- **Una tab de completitud:** conservar las filas con su vacío en `clean_data`, marcar cada una con
+  una columna `complete` (sí/no) y calcular el resumen solo con las completas. El analista ve todo y
+  elige qué usar.
+- **Pedir el dato faltante:** las filas en `rejected_rows` son una lista de qué falta. Si la
+  plataforma permite reexportar esos días (los datos de conversión suelen llegar con demora), se
+  vuelven a cargar en el CSV siguiente y entran solas.
+- **Separar las métricas por dato disponible:** calcular CTR y CPC (que no necesitan conversiones ni
+  revenue) con todas las filas, y CPA y ROAS solo con las completas, publicadas en tablas distintas.
+- No se recomienda **imputar** (estimar el valor faltante con un promedio): en un análisis de
+  performance un dato inventado es peor que uno ausente.
 
 - **Fuente de datos automática:** en vez de subir el CSV al repo, leerlo de una carpeta de Google
   Drive o de la API de cada plataforma (Google Ads, Meta, LinkedIn). Solo cambiaría `load_raw`.

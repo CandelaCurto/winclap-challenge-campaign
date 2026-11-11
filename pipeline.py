@@ -455,42 +455,6 @@ def write_tab(book: gspread.Spreadsheet, title: str, df: pd.DataFrame) -> None:
     log.info("Tab '%s' reemplazada: %d filas", title, len(df))
 
 
-# Qué es cada columna y cómo se calcula, publicado como una tab más: quien use el Sheet puede
-# entender y rehacer cada número sin conocer el código. Un test controla que no falte ninguna columna.
-DICTIONARY = pd.DataFrame(
-    [
-        ("las dos", "campaign_id", "Código único de la campaña", "Del archivo"),
-        ("las dos", "campaign_name", "Nombre: PAÍS_OBJETIVO_PLATAFORMA_PERÍODO", "Del archivo, sin espacios sobrantes. Si una campaña trae más de uno, el más frecuente"),
-        ("las dos", "channel", "Plataforma: Google Ads, Meta Ads o LinkedIn Ads", "Reconocida por palabra clave en el canal del archivo"),
-        ("las dos", "country", "País de la campaña", "Del archivo"),
-        ("las dos", "objective", "Objetivo: Awareness, Consideration o Conversion", "Del archivo"),
-        ("las dos", "currency", "Moneda de todos los montos de la fila", "Del archivo"),
-        (DAILY_TAB, "date", "Día", "Del archivo (acepta AAAA-MM-DD y DD/MM/AAAA)"),
-        (DAILY_TAB, "impressions", "Veces que se mostró el anuncio ese día", "Suma de las filas de esa campaña y día"),
-        (DAILY_TAB, "clicks", "Clicks del día", "Suma de las filas de esa campaña y día"),
-        (DAILY_TAB, "conversions", "Conversiones del día", "Suma de las filas de esa campaña y día"),
-        (DAILY_TAB, "spend", "Gasto del día", "Suma de las filas de esa campaña y día. Un gasto negativo se pasó a positivo (ver corrected_rows)"),
-        (DAILY_TAB, "revenue", "Ingresos del día", "Suma de las filas de esa campaña y día"),
-        (DAILY_TAB, "ctr", "Click-through rate: de cada 100 impresiones, cuántos clicks", "clicks / impressions"),
-        (DAILY_TAB, "cpc", "Costo por click", "spend / clicks"),
-        (DAILY_TAB, "cpa", "Costo por conversión", "spend / conversions. Vacío si no hubo conversiones"),
-        (DAILY_TAB, "roas", "Dólares que volvieron por cada dólar invertido", "revenue / spend"),
-        (SUMMARY_TAB, "impressions", "Impresiones de la campaña", "Suma de todos los días"),
-        (SUMMARY_TAB, "clicks", "Clicks de la campaña", "Suma de todos los días"),
-        (SUMMARY_TAB, "spend", "Gasto total de la campaña", "Suma de todos los días"),
-        (SUMMARY_TAB, "conversions", "Conversiones de la campaña", "Suma de todos los días"),
-        (SUMMARY_TAB, "revenue", "Ingresos de la campaña", "Suma de todos los días"),
-        (SUMMARY_TAB, "ctr", "Click-through rate de la campaña", "clicks / impressions, sobre los totales"),
-        (SUMMARY_TAB, "cpc", "Costo por click de la campaña", "spend / clicks, sobre los totales"),
-        (SUMMARY_TAB, "cpa", "Costo por conversión de la campaña", "spend / conversions, sobre los totales. Vacío si no hubo conversiones"),
-        (SUMMARY_TAB, "roas", "Retorno del gasto de la campaña", "revenue / spend, sobre los totales"),
-        ("todas", "(celda vacía)", "Solo en métricas: no se puede calcular porque habría que dividir por 0 (por ejemplo, CPA sin conversiones)", "Nunca significa 0. Las filas con algún dato vacío se descartan: están en rejected_rows del Sheet de revisión"),
-    ],
-    columns=["tab", "columna", "qué es", "cómo se calcula"],
-)
-DICTIONARY_TAB = "diccionario"
-
-
 def publish(daily: pd.DataFrame, summary: pd.DataFrame) -> str:
     spreadsheet_id = os.environ.get("SPREADSHEET_ID")
     if not spreadsheet_id:
@@ -498,7 +462,6 @@ def publish(daily: pd.DataFrame, summary: pd.DataFrame) -> str:
     book = sheets_client().open_by_key(spreadsheet_id)
     write_tab(book, DAILY_TAB, daily)
     write_tab(book, SUMMARY_TAB, summary)
-    write_tab(book, DICTIONARY_TAB, DICTIONARY)
     log.info("Publicado en %s", book.url)
     return book.url
 
