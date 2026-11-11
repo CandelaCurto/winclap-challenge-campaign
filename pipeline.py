@@ -35,7 +35,7 @@ REJECTED_TAB = "rejected_rows"
 CORRECTED_TAB = "corrected_rows"
 
 # Si la limpieza descarta más que esto, el archivo está roto y no se publica: el Sheet se queda con
-# los datos de la corrida anterior. Hoy se descarta el 5,6 %; el 20 % deja margen para un mal día
+# los datos de la corrida anterior. Hoy se descarta el 10,7 %; el 20 % deja margen para un mal día
 # sin dejar pasar un archivo con, por ejemplo, una columna entera mal exportada.
 MAX_DISCARDED_SHARE = 0.20
 # Lo mismo para las correcciones: unas pocas son errores de carga, pero si hay que corregir muchas
@@ -207,16 +207,19 @@ def normalize(raw: pd.DataFrame) -> pd.DataFrame:
 
 def invalid_reasons(df: pd.DataFrame) -> pd.DataFrame:
     """Una columna por regla; True donde la fila la rompe."""
-    return pd.DataFrame(
-        {
-            "fecha ilegible": df["date"].isna(),
-            # Un día que todavía no pasó no puede tener performance: es un error de tipeo (2062).
-            "fecha futura": df["date"] > pd.Timestamp.today().normalize(),
-            "sin impresiones, clicks o gasto": df[["impressions", "clicks", "spend"]].isna().any(axis=1),
-            "valor negativo": (df[NUMERIC_COLS] < 0).any(axis=1),
-            "más clicks que impresiones": df["clicks"] > df["impressions"],
-        }
-    ).fillna(False)
+    rules = {
+        "fecha ilegible": df["date"].isna(),
+        # Un día que todavía no pasó no puede tener performance: es un error de tipeo (2062).
+        "fecha futura": df["date"] > pd.Timestamp.today().normalize(),
+    }
+    # Una fila sin alguno de sus números se descarta, sea cual sea la columna: así la regla no
+    # depende de qué dato falte en este archivo, y todo lo que queda está completo para calcular.
+    # El motivo nombra la columna, y también cubre un valor que no era un número ('n/a').
+    for col in NUMERIC_COLS:
+        rules[f"{col} vacío"] = df[col].isna()
+    rules["valor negativo"] = (df[NUMERIC_COLS] < 0).any(axis=1)
+    rules["más clicks que impresiones"] = df["clicks"] > df["impressions"]
+    return pd.DataFrame(rules).fillna(False)
 
 
 def duplicate_reasons(df: pd.DataFrame) -> pd.Series:
@@ -261,10 +264,7 @@ def clean(raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, 
     report["inválidas descartadas"] = int((invalid != "").sum())
     df = df[invalid == ""]
 
-    # Conversiones o revenue vacíos no invalidan la fila: el resto de sus datos sirve.
     report["filas válidas"] = len(df)
-    report["con conversiones vacías"] = int(df["conversions"].isna().sum())
-    report["con revenue vacío"] = int(df["revenue"].isna().sum())
 
     reason = pd.concat([duplicate.dropna(), invalid[invalid != ""]])
     rejected = raw.loc[reason.index].assign(reason=reason).sort_index()
@@ -300,8 +300,8 @@ def campaign_attributes(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
 def merge_same_day(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     """Una fila por campaña, día y moneda, sumando las filas que comparten la clave.
 
-    Regla estricta: si alguna de las filas sumadas tiene un valor vacío, el total queda vacío.
-    Sumar solo las partes conocidas daría un total más bajo que el real, presentado como completo.
+    Las filas llegan completas (clean descarta las que tienen un número vacío). skipna=False es una
+    red: si alguna vez llegara un vacío, el total queda vacío en vez de sumar solo una parte.
     """
     attrs, inconsistent = campaign_attributes(df)
     grouped = df.groupby(KEY_COLS, dropna=False)
@@ -314,8 +314,6 @@ def merge_same_day(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         "campañas con atributos inconsistentes": inconsistent,
         "filas por campaña y día": len(merged),
         "de ellas, unidas de varias filas": int((grouped.size() > 1).sum()),
-        "con conversiones vacías tras unir": int(merged["conversions"].isna().sum()),
-        "con revenue vacío tras unir": int(merged["revenue"].isna().sum()),
     }
     return merged, report
 
@@ -331,65 +329,28 @@ def safe_divide(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
     return numerator / denominator
 
 
-def add_metrics(
-    df: pd.DataFrame, spend_for_cpa: str = "spend", spend_for_roas: str = "spend"
-) -> pd.DataFrame:
-    """CTR, CPC, CPA y ROAS. Se usa igual por fila y sobre los totales del resumen.
-
-    El resumen pasa otro gasto para CPA y ROAS: el de los días que tienen el dato (ver summarize).
-    """
+def add_metrics(df: pd.DataFrame) -> pd.DataFrame:
+    """CTR, CPC, CPA y ROAS. Se usa igual por fila y sobre los totales del resumen."""
     return df.assign(
         ctr=safe_divide(df["clicks"], df["impressions"]),
         cpc=safe_divide(df["spend"], df["clicks"]),
-        cpa=safe_divide(df[spend_for_cpa], df["conversions"]),
-        roas=safe_divide(df["revenue"], df[spend_for_roas]),
+        cpa=safe_divide(df["spend"], df["conversions"]),
+        roas=safe_divide(df["revenue"], df["spend"]),
     )
 
 
 def summarize(daily: pd.DataFrame) -> pd.DataFrame:
     """Una fila por campaña: totales y métricas recalculadas sobre esos totales.
 
-    Días con conversiones o revenue vacío: CPA y ROAS se calculan solo con el gasto de los días
-    que tienen ese dato. Si no, el gasto de un día sin dato se dividiría por resultados de otros
-    días y la métrica saldría peor de lo que es. Los totales de conversiones y revenue suman lo
-    conocido; si una campaña no tiene ningún dato, quedan vacíos.
-
-    Ese gasto base queda en la tabla (spend_with_conversions, spend_with_revenue) para que quien
-    la use pueda rehacer cada métrica con columnas visibles, sin conocer esta regla.
+    Nunca se promedian las métricas de cada día: el promedio le daría el mismo peso a un día de
+    USD 10 que a uno de USD 1.000. Como no quedan vacíos, cada métrica del resumen se rehace con
+    las columnas de la misma fila (cpa = spend / conversions).
     """
     # Los atributos ya son únicos por campaña (merge_same_day): agruparlos no parte ninguna fila.
     campaign_cols = [col for col in OUTPUT_ID_COLS if col != "date"]
-    with_known = daily.assign(
-        spend_with_conversions=daily["spend"].where(daily["conversions"].notna()),
-        spend_with_revenue=daily["spend"].where(daily["revenue"].notna()),
-    )
-    money = MONEY_COLS + ["spend_with_conversions", "spend_with_revenue"]
-    totals = (
-        with_known.groupby(campaign_cols, dropna=False)[COUNT_COLS + money]
-        .sum(min_count=1)
-        .reset_index()
-    )
-    totals[money] = totals[money].round(2)  # los montos sumados, sin ruido de decimales
-
-    incomplete = totals[
-        totals["spend_with_conversions"].lt(totals["spend"])
-        | totals["spend_with_revenue"].lt(totals["spend"])
-    ]
-    for row in incomplete.itertuples():
-        log.info(
-            "%s: CPA sobre el %.0f%% del gasto, ROAS sobre el %.0f%% (días sin dato)",
-            row.campaign_id,
-            100 * row.spend_with_conversions / row.spend,
-            100 * row.spend_with_revenue / row.spend,
-        )
-
-    summary = add_metrics(totals, "spend_with_conversions", "spend_with_revenue")
-    # Cada base al lado de lo que divide: spend_with_conversions junto a conversions, etc.
-    order = campaign_cols + [
-        "impressions", "clicks", "spend",
-        "conversions", "spend_with_conversions", "revenue", "spend_with_revenue",
-    ] + METRIC_COLS
-    return summary[order]
+    totals = daily.groupby(campaign_cols, dropna=False)[NUMERIC_COLS].sum().reset_index()
+    totals[MONEY_COLS] = totals[MONEY_COLS].round(2)  # los montos sumados, sin ruido de decimales
+    return add_metrics(totals)
 
 
 def quality_gate(report: dict) -> list[str]:
@@ -439,9 +400,7 @@ SHEET_FORMATS = {
     "clicks": ("NUMBER", "#,##0"),
     "conversions": ("NUMBER", "#,##0"),
     "spend": ("NUMBER", "#,##0.00"),
-    "spend_with_conversions": ("NUMBER", "#,##0.00"),
     "revenue": ("NUMBER", "#,##0.00"),
-    "spend_with_revenue": ("NUMBER", "#,##0.00"),
     "ctr": ("NUMBER", "0.00%"),
     "cpc": ("NUMBER", "#,##0.00"),
     "cpa": ("NUMBER", "#,##0.00"),
@@ -509,25 +468,23 @@ DICTIONARY = pd.DataFrame(
         (DAILY_TAB, "date", "Día", "Del archivo (acepta AAAA-MM-DD y DD/MM/AAAA)"),
         (DAILY_TAB, "impressions", "Veces que se mostró el anuncio ese día", "Suma de las filas de esa campaña y día"),
         (DAILY_TAB, "clicks", "Clicks del día", "Suma de las filas de esa campaña y día"),
-        (DAILY_TAB, "conversions", "Conversiones del día", "Suma de las filas de esa campaña y día. Vacío si alguna no tenía el dato"),
+        (DAILY_TAB, "conversions", "Conversiones del día", "Suma de las filas de esa campaña y día"),
         (DAILY_TAB, "spend", "Gasto del día", "Suma de las filas de esa campaña y día. Un gasto negativo se pasó a positivo (ver corrected_rows)"),
-        (DAILY_TAB, "revenue", "Ingresos del día", "Suma de las filas de esa campaña y día. Vacío si alguna no tenía el dato"),
+        (DAILY_TAB, "revenue", "Ingresos del día", "Suma de las filas de esa campaña y día"),
         (DAILY_TAB, "ctr", "Click-through rate: de cada 100 impresiones, cuántos clicks", "clicks / impressions"),
         (DAILY_TAB, "cpc", "Costo por click", "spend / clicks"),
-        (DAILY_TAB, "cpa", "Costo por conversión", "spend / conversions. Vacío si no hubo conversiones o falta el dato"),
-        (DAILY_TAB, "roas", "Dólares que volvieron por cada dólar invertido", "revenue / spend. Vacío si falta el revenue"),
+        (DAILY_TAB, "cpa", "Costo por conversión", "spend / conversions. Vacío si no hubo conversiones"),
+        (DAILY_TAB, "roas", "Dólares que volvieron por cada dólar invertido", "revenue / spend"),
         (SUMMARY_TAB, "impressions", "Impresiones de la campaña", "Suma de todos los días"),
         (SUMMARY_TAB, "clicks", "Clicks de la campaña", "Suma de todos los días"),
         (SUMMARY_TAB, "spend", "Gasto total de la campaña", "Suma de todos los días"),
-        (SUMMARY_TAB, "conversions", "Conversiones conocidas", "Suma de los días que tienen el dato"),
-        (SUMMARY_TAB, "spend_with_conversions", "Gasto de los días que tienen dato de conversiones: la base del CPA", "Suma del gasto de esos días. Igual a spend si no falta ningún día"),
-        (SUMMARY_TAB, "revenue", "Ingresos conocidos", "Suma de los días que tienen el dato"),
-        (SUMMARY_TAB, "spend_with_revenue", "Gasto de los días que tienen dato de revenue: la base del ROAS", "Suma del gasto de esos días. Igual a spend si no falta ningún día"),
+        (SUMMARY_TAB, "conversions", "Conversiones de la campaña", "Suma de todos los días"),
+        (SUMMARY_TAB, "revenue", "Ingresos de la campaña", "Suma de todos los días"),
         (SUMMARY_TAB, "ctr", "Click-through rate de la campaña", "clicks / impressions, sobre los totales"),
         (SUMMARY_TAB, "cpc", "Costo por click de la campaña", "spend / clicks, sobre los totales"),
-        (SUMMARY_TAB, "cpa", "Costo por conversión de la campaña", "spend_with_conversions / conversions: solo los días con dato, así el gasto de un día sin dato no empeora el CPA"),
-        (SUMMARY_TAB, "roas", "Retorno del gasto de la campaña", "revenue / spend_with_revenue: solo los días con dato"),
-        ("todas", "(celda vacía)", "No hay dato, o la métrica no se puede calcular (por ejemplo, dividir por 0)", "Nunca significa 0"),
+        (SUMMARY_TAB, "cpa", "Costo por conversión de la campaña", "spend / conversions, sobre los totales. Vacío si no hubo conversiones"),
+        (SUMMARY_TAB, "roas", "Retorno del gasto de la campaña", "revenue / spend, sobre los totales"),
+        ("todas", "(celda vacía)", "Solo en métricas: no se puede calcular porque habría que dividir por 0 (por ejemplo, CPA sin conversiones)", "Nunca significa 0. Las filas con algún dato vacío se descartan: están en rejected_rows del Sheet de revisión"),
     ],
     columns=["tab", "columna", "qué es", "cómo se calcula"],
 )

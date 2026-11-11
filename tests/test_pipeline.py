@@ -157,15 +157,18 @@ def test_negative_spend_is_made_positive_and_recorded(tmp_path):
     assert list(rejected["source_line"]) == [3, 4]
 
 
-def test_blank_results_keep_the_row_and_stay_blank(tmp_path):
-    clean, rejected, _ = run_clean(tmp_path, row(conversions="", revenue=""))
-    assert len(clean) == 1 and rejected.empty
-    assert pd.isna(clean["conversions"].iloc[0]) and pd.isna(clean["revenue"].iloc[0])
+def test_row_with_any_empty_number_is_rejected_naming_the_columns(tmp_path):
+    clean, rejected, _ = run_clean(
+        tmp_path, row(), row(date="2026-09-05", conversions="", revenue=""), row(date="2026-09-06", spend="n/a")
+    )
+    assert len(clean) == 1
+    assert list(rejected["reason"]) == ["conversions vacío; revenue vacío", "spend vacío"]
+    assert rejected.loc[1, "spend"] == "n/a"  # se ve qué llegó en vez del número
 
 
-def test_fractional_count_becomes_blank(tmp_path):
-    clean, _, _ = run_clean(tmp_path, row(conversions='"2,5"'))  # entre comillas: la coma es decimal
-    assert pd.isna(clean["conversions"].iloc[0])
+def test_fractional_count_is_not_rounded_and_the_row_is_rejected(tmp_path):
+    clean, rejected, _ = run_clean(tmp_path, row(conversions='"2,5"'))  # entre comillas: la coma es decimal
+    assert clean.empty and rejected.loc[0, "reason"] == "conversions vacío"
 
 
 # --- Unión por campaña y día ---------------------------------------------------------------------
@@ -178,9 +181,14 @@ def test_merge_sums_rows_of_the_same_campaign_and_day(tmp_path):
     assert daily.loc[0, "impressions"] == 1500
 
 
-def test_merge_blank_part_leaves_the_total_blank(tmp_path):
-    clean, _, _ = run_clean(tmp_path, row(conversions="9"), row(spend="30", conversions=""))
-    daily, _ = p.merge_same_day(clean)
+def test_merge_blank_part_leaves_the_total_blank():
+    """Red de seguridad: clean ya no deja vacíos, pero si llegara uno, el total no suma una parte."""
+    part = {"date": pd.Timestamp("2026-09-04"), "campaign_id": "C1", "campaign_name": "N", "channel": "Meta Ads",
+            "country": "AR", "objective": "Conversion", "currency": "USD", "impressions": 10, "clicks": 1,
+            "spend": 5.0, "revenue": 1.0}
+    df = pd.DataFrame([{**part, "conversions": 9}, {**part, "conversions": None}])
+    df["conversions"] = df["conversions"].astype("Int64")
+    daily, _ = p.merge_same_day(df)
     assert pd.isna(daily.loc[0, "conversions"])
 
 
@@ -211,32 +219,27 @@ def test_safe_divide_blank_when_denominator_is_zero_or_missing():
     assert result.iloc[1] == 0  # el 0 arriba sí es un resultado válido
 
 
-def test_summary_cpa_uses_only_the_spend_of_days_with_conversions(tmp_path):
+def test_summary_recalculates_metrics_over_totals(tmp_path):
     clean, _, _ = run_clean(
         tmp_path,
-        row(date="2026-09-04", spend="100", conversions="10"),
-        row(date="2026-09-05", spend="300", conversions=""),
+        row(date="2026-09-04", spend="10", conversions="10"),
+        row(date="2026-09-05", spend="1000", conversions="1"),
     )
     daily, _ = p.merge_same_day(clean)
     summary = p.summarize(p.add_metrics(daily))
-    assert summary.loc[0, "spend"] == 400  # el total sigue siendo el total
-    assert summary.loc[0, "cpa"] == 10  # 100 / 10, no 400 / 10
-    assert summary.loc[0, "spend_with_conversions"] == 100  # la base del CPA, a la vista
+    assert summary.loc[0, "cpa"] == pytest.approx(1010 / 11)  # no el promedio de 1 y 1000
 
 
 def test_every_summary_metric_can_be_redone_from_visible_columns():
     """Un analista tiene que poder rehacer cada métrica con las columnas de la tabla."""
     clean, _, _, _ = p.clean(p.load_raw(CASE_CSV))
     daily = p.add_metrics(p.merge_same_day(clean)[0])
-    for table, cpa_base, roas_base in [
-        (daily, "spend", "spend"),
-        (p.summarize(daily), "spend_with_conversions", "spend_with_revenue"),
-    ]:
+    for table in [daily, p.summarize(daily)]:
         pd.testing.assert_series_equal(
-            table["cpa"], p.safe_divide(table[cpa_base], table["conversions"]), check_names=False
+            table["cpa"], p.safe_divide(table["spend"], table["conversions"]), check_names=False
         )
         pd.testing.assert_series_equal(
-            table["roas"], p.safe_divide(table["revenue"], table[roas_base]), check_names=False
+            table["roas"], p.safe_divide(table["revenue"], table["spend"]), check_names=False
         )
 
 
@@ -393,10 +396,11 @@ def test_case_file_end_to_end():
     daily, _ = p.merge_same_day(clean)
     summary = p.summarize(p.add_metrics(daily))
 
-    assert (report["filas leídas"], report["filas válidas"], len(rejected)) == (214, 202, 12)
-    assert report["inválidas descartadas"] == 6  # más clicks que impresiones
+    assert (report["filas leídas"], report["filas válidas"], len(rejected)) == (214, 191, 23)
+    assert report["inválidas descartadas"] == 17  # 6 más clicks, 7 sin conversions, 6 sin revenue (con superposición)
     assert len(corrected) == 4  # gasto negativo pasado a positivo (la quinta se descarta igual)
-    assert len(daily) == 145 and len(summary) == 12
+    assert len(daily) == 141 and len(summary) == 12
+    assert not daily[p.NUMERIC_COLS].isna().any().any()  # lo publicado no tiene números vacíos
     assert not daily.duplicated(["date", "campaign_id"]).any()  # clave primaria
     assert not summary.duplicated("campaign_id").any()
     assert daily["spend"].sum() == pytest.approx(clean["spend"].sum())

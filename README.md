@@ -108,9 +108,12 @@ mayúsculas y las columnas de más no importan.
 
 ## Reglas de limpieza
 
-**Vacío no es cero.** Un 0 es un dato ("medimos y no hubo"); un vacío es su falta ("no sabemos").
-Convertir el vacío en 0 inventaría un dato. Por eso conversiones o revenue vacíos no descartan la fila
-(impresiones, clicks y gasto siguen sirviendo) y se mantienen vacíos de punta a punta.
+**Una fila con algún número vacío se descarta.** Un 0 es un dato ("medimos y no hubo"); un vacío es
+su falta ("no sabemos"), y convertirlo en 0 inventaría un dato. Si a una fila le falta cualquiera de
+sus números (impresiones, clicks, gasto, conversiones o revenue), se descarta entera y el motivo dice
+qué columna faltaba (`conversions vacío`). La regla es la misma para cualquier columna, así no
+depende de qué dato falte en cada archivo, y todo lo que queda está completo: cada métrica se puede
+calcular y rehacer con las columnas de la misma fila.
 
 | Situación | Qué hace | Por qué |
 |---|---|---|
@@ -121,14 +124,14 @@ Convertir el vacío en 0 inventaría un dato. Por eso conversiones o revenue vac
 | Canal distinto al del nombre de la campaña (`AR_CONV_Meta_Q4`) | Avisa | Control cruzado: algo está mal cargado |
 | Números con `$`, `USD`, coma o punto (`"$ 182,41"`, `"1.234,5"`) | Los convierte a número | El último separador es decimal si lo siguen 1 o 2 dígitos; si no, es de miles |
 | Número entre paréntesis (`"(182.41)"`) | Lo lee como negativo | Convención contable |
-| Texto que no es un número (`1e3`, `n/a`) | Lo deja vacío y avisa | No se adivina |
+| Texto que no es un número (`1e3`, `n/a`) | Lo trata como vacío y descarta la fila | No se adivina: en `rejected_rows` se ve qué llegó |
 | Gasto negativo | Lo pasa a positivo y lo registra en `corrected_rows` | El gasto no puede ser negativo: se asume un error de signo y se conserva la fila |
 | Fila idéntica a otra (ya normalizada) | Descarta la copia | Es un duplicado: sumaría dos veces lo mismo |
 | Más clicks que impresiones | Descarta la fila | Un click requiere una impresión |
 | Impresiones, clicks, conversiones o revenue negativos | Descarta la fila | Valor imposible |
 | Fecha ilegible o futura | Descarta la fila | Un día que no pasó no puede tener performance (`2062-09-17` es un tipeo) |
-| Sin impresiones, clicks o gasto | Descarta la fila | No se puede calcular casi nada |
-| Cantidad con decimales (12,5 clicks) | La deja vacía y avisa | No se redondea a escondidas |
+| Algún número vacío | Descarta la fila (`<columna> vacío`) | Ver arriba |
+| Cantidad con decimales (12,5 clicks) | La trata como vacía y descarta la fila | No se redondea a escondidas |
 
 Toda fila descartada queda en `rejected_rows` y toda fila corregida en `corrected_rows`, tal como
 venían en el archivo, para poder auditar qué se sacó o cambió sin confiar en el script a ciegas.
@@ -142,10 +145,6 @@ clave porque sumar dólares con pesos da un número sin sentido. Nombre, canal, 
 están en la clave: son atributos fijos de la campaña, y si uno viniera escrito distinto un día, no
 debe partir la fila; se usa el valor más frecuente y el log avisa.
 
-**Al unir, un vacío deja el total vacío.** Si una de las partes del día tiene conversiones vacías, el
-total del día queda vacío: sumar solo lo conocido daría un total más bajo que el real, presentado como
-si estuviera completo.
-
 **Los montos sumados se redondean al centavo**, para sacar el ruido de sumar decimales
 (`486.29999999999995`). Las métricas no se redondean: el formato se aplica al publicar.
 
@@ -155,29 +154,16 @@ si estuviera completo.
 spend.** Una sola función las calcula por fila y sobre los totales del resumen, así las fórmulas no
 pueden quedar distintas entre las dos tablas.
 
-**Si el denominador es 0 o falta un valor, la métrica queda vacía.** No 0, porque un CPA de 0 diría
-que las conversiones salieron gratis. No infinito, porque no se puede sumar, graficar ni comparar. El 0
-en el numerador sí es válido: revenue 0 da ROAS 0 (se invirtió y no volvió nada). La métrica vacía
-no pierde la fila: queda para que el analista la interprete.
+**Si el denominador es 0, la métrica queda vacía.** Por ejemplo, el CPA de un día sin conversiones.
+No 0, porque un CPA de 0 diría que las conversiones salieron gratis. No infinito, porque no se puede
+sumar, graficar ni comparar. El 0 en el numerador sí es válido: revenue 0 da ROAS 0 (se invirtió y no
+volvió nada). Es el único vacío que queda en los datos publicados, y la fila se conserva.
 
 **El resumen recalcula las métricas sobre los totales**, nunca promediando las de cada día: el
-promedio le da el mismo peso a un día de USD 10 que a uno de USD 1.000.
-
-**En el resumen, CPA y ROAS usan solo los días que tienen el dato.** Si una campaña tiene días con
-conversiones vacías, dividir el gasto total por las conversiones conocidas contaría el gasto de esos
-días como si no hubiera traído nada, y el CPA saldría peor por un dato que falta. Por eso el CPA usa
-el gasto de los días con conversiones conocidas, y el ROAS el de los días con revenue conocido.
-
-**Esa base está a la vista.** El resumen tiene dos columnas más, `spend_with_conversions` (la base del
-CPA) y `spend_with_revenue` (la base del ROAS), al lado de lo que dividen:
-
-- `cpa = spend_with_conversions / conversions`
-- `roas = revenue / spend_with_revenue`
-
-Así cualquier analista puede rehacer cada métrica con las columnas de la tabla, sin conocer esta
-regla. En las campañas sin días faltantes, las dos bases son iguales a `spend`; donde son menores,
-muestran cuánto gasto quedó sin dato. La tab `diccionario` lo explica junto con el resto de las
-columnas, y un test controla que ninguna columna publicada quede sin explicar.
+promedio le da el mismo peso a un día de USD 10 que a uno de USD 1.000. Como no hay números vacíos,
+cada métrica se rehace con las columnas de la misma fila (`cpa = spend / conversions`), sin conocer
+ninguna regla. La tab `diccionario` explica cada columna, y un test controla que ninguna columna
+publicada quede sin explicar.
 
 **El objetivo de la campaña sirve para leer las métricas, no para calcularlas.** Una campaña de
 Awareness no se juzga por su CPA, pero el CPA se calcula igual que en las demás: si la regla cambiara
@@ -202,6 +188,10 @@ según el objetivo, la misma columna significaría cosas distintas según la fil
 
 ## Supuestos y riesgos
 
+- **Descartar la fila entera pierde también sus datos completos.** Una fila sin conversiones tiene
+  impresiones, clicks y gasto válidos, y se pierden con ella: el gasto total publicado es menor que el
+  real. Se eligió así para que la regla sea igual para cualquier columna y todo lo publicado esté
+  completo y se pueda verificar. Las filas descartadas, con su gasto, quedan en `rejected_rows`.
 - **Cada CSV trae el histórico completo**, no solo los días nuevos. Por eso cada corrida reemplaza el
   contenido de los Sheets.
 - **Las filas distintas de un mismo día son partes, no correcciones.** Si fueran versiones corregidas
