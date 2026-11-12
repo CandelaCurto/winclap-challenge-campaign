@@ -11,7 +11,7 @@ Sheets. It runs on GitHub Actions when new data is pushed, by hand, and every Mo
 - Repository: [CandelaCurto/winclap-challenge-campaign](https://github.com/CandelaCurto/winclap-challenge-campaign)
 - Results Sheet: [`clean_data` and `campaign_summary`](https://docs.google.com/spreadsheets/d/1fSj01Pwtsq3kPatY8jxhsvIrMPL7OUkeMafvnGNybZ8/edit)
 - Review Sheet: [`rejected_rows` and `corrected_rows`](https://docs.google.com/spreadsheets/d/1riiICt4jCo14nDha1lX9h72UQN_Sf_pY5PiILsG72cw/edit)
-- A successful workflow run: [Actions run 43216196334](https://github.com/CandelaCurto/winclap-challenge-campaign/actions/runs/43216196334)
+- A successful workflow run: [Actions run 43228363428](https://github.com/CandelaCurto/winclap-challenge-campaign/actions/runs/43228363428)
 
 **Key cleaning decisions**
 
