@@ -30,12 +30,22 @@ def run_clean(tmp_path, *rows):
     return clean, rejected, report
 
 
-def row(date="2026-09-04", campaign="C1004", name="AR_CONV_Meta_Q4", channel="Meta Ads",
-        impressions="1000", clicks="100", spend="50", conversions="5", revenue="200"):
+def row(
+    date="2026-09-04",
+    campaign="C1004",
+    name="AR_CONV_Meta_Q4",
+    channel="Meta Ads",
+    impressions="1000",
+    clicks="100",
+    spend="50",
+    conversions="5",
+    revenue="200",
+):
     return f"{date},{campaign},{name},{channel},AR,Conversion,{impressions},{clicks},{spend},{conversions},{revenue},USD"
 
 
 # --- Lectura de valores --------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize(
     "text, expected",
@@ -69,6 +79,7 @@ def test_accounting_negative_spend_is_corrected_too(tmp_path):
 
 
 # --- Forma del archivo ---------------------------------------------------------------------------
+
 
 def test_missing_column_stops_with_a_clear_message(tmp_path):
     path = tmp_path / "campaigns.csv"
@@ -117,6 +128,7 @@ def test_classify_channel(text, expected):
 
 # --- Limpieza ------------------------------------------------------------------------------------
 
+
 def test_duplicate_is_detected_even_with_a_different_date_format(tmp_path):
     clean, rejected, report = run_clean(tmp_path, row(date="2026-09-04"), row(date="04/09/2026"))
     assert len(clean) == 1
@@ -144,7 +156,11 @@ def test_impossible_rows_are_rejected_with_every_reason(tmp_path):
 
 def test_negative_spend_is_made_positive_and_recorded(tmp_path):
     path = tmp_path / "campaigns.csv"
-    rows = [row(spend="-328.33"), row(spend="-328.33"), row(date="2026-09-05", spend="-50", clicks="2000")]
+    rows = [
+        row(spend="-328.33"),
+        row(spend="-328.33"),
+        row(date="2026-09-05", spend="-50", clicks="2000"),
+    ]
     path.write_text("\n".join([HEADER, *rows]) + "\n", encoding="utf-8")
     clean, rejected, corrected, report = p.clean(p.load_raw(path))
 
@@ -159,7 +175,10 @@ def test_negative_spend_is_made_positive_and_recorded(tmp_path):
 
 def test_row_with_any_empty_number_is_rejected_naming_the_columns(tmp_path):
     clean, rejected, _ = run_clean(
-        tmp_path, row(), row(date="2026-09-05", conversions="", revenue=""), row(date="2026-09-06", spend="n/a")
+        tmp_path,
+        row(),
+        row(date="2026-09-05", conversions="", revenue=""),
+        row(date="2026-09-06", spend="n/a"),
     )
     assert len(clean) == 1
     assert list(rejected["reason"]) == ["missing conversions; missing revenue", "missing spend"]
@@ -167,11 +186,14 @@ def test_row_with_any_empty_number_is_rejected_naming_the_columns(tmp_path):
 
 
 def test_fractional_count_is_not_rounded_and_the_row_is_rejected(tmp_path):
-    clean, rejected, _ = run_clean(tmp_path, row(conversions='"2,5"'))  # entre comillas: la coma es decimal
+    clean, rejected, _ = run_clean(
+        tmp_path, row(conversions='"2,5"')
+    )  # entre comillas: la coma es decimal
     assert clean.empty and rejected.loc[0, "reason"] == "missing conversions"
 
 
 # --- Unión por campaña y día ---------------------------------------------------------------------
+
 
 def test_merge_sums_rows_of_the_same_campaign_and_day(tmp_path):
     clean, _, _ = run_clean(tmp_path, row(spend="50"), row(spend="30", impressions="500"))
@@ -183,9 +205,19 @@ def test_merge_sums_rows_of_the_same_campaign_and_day(tmp_path):
 
 def test_merge_blank_part_leaves_the_total_blank():
     """Red de seguridad: clean ya no deja vacíos, pero si llegara uno, el total no suma una parte."""
-    part = {"date": pd.Timestamp("2026-09-04"), "campaign_id": "C1", "campaign_name": "N", "channel": "Meta Ads",
-            "country": "AR", "objective": "Conversion", "currency": "USD", "impressions": 10, "clicks": 1,
-            "spend": 5.0, "revenue": 1.0}
+    part = {
+        "date": pd.Timestamp("2026-09-04"),
+        "campaign_id": "C1",
+        "campaign_name": "N",
+        "channel": "Meta Ads",
+        "country": "AR",
+        "objective": "Conversion",
+        "currency": "USD",
+        "impressions": 10,
+        "clicks": 1,
+        "spend": 5.0,
+        "revenue": 1.0,
+    }
     df = pd.DataFrame([{**part, "conversions": 9}, {**part, "conversions": None}])
     df["conversions"] = df["conversions"].astype("Int64")
     daily, _ = p.merge_same_day(df)
@@ -212,6 +244,7 @@ def test_different_currencies_are_never_summed(tmp_path):
 
 
 # --- Métricas y resumen --------------------------------------------------------------------------
+
 
 def test_safe_divide_blank_when_denominator_is_zero_or_missing():
     result = p.safe_divide(pd.Series([10, 0, 10, None]), pd.Series([0, 5, None, 5]))
@@ -260,6 +293,7 @@ def test_summed_money_has_no_float_noise(tmp_path):
 
 # --- Publicación ---------------------------------------------------------------------------------
 
+
 def test_sheet_values_are_literal_with_real_dates_and_blanks():
     df = pd.DataFrame(
         {
@@ -300,6 +334,7 @@ def test_write_tab_clears_then_writes_literal_values():
 
 # --- Control antes de publicar -------------------------------------------------------------------
 
+
 @pytest.mark.parametrize(
     "read, valid, publishes",
     [(214, 198, True), (214, 172, True), (214, 171, False), (214, 0, False)],
@@ -319,6 +354,7 @@ def test_broken_file_stops_before_publishing(tmp_path, monkeypatch):
 
 
 # --- Reporte en GitHub Actions -------------------------------------------------------------------
+
 
 def test_step_summary_reports_why_a_broken_file_was_not_published(tmp_path, monkeypatch, capsys):
     path = tmp_path / "broken.csv"
@@ -352,9 +388,14 @@ def test_step_summary_explains_a_file_with_the_wrong_shape(tmp_path, monkeypatch
 
 # --- CSVs nuevos: lo que puede cambiar de una semana a otra --------------------------------------
 
+
 def test_excel_export_with_semicolons_and_latin1_is_read(tmp_path):
     path = tmp_path / "campaigns.csv"
-    data_row = row(name="AR_CONV_Ñandú_Meta_Q4", spend="SPEND").replace(",", ";").replace("SPEND", "182,41")
+    data_row = (
+        row(name="AR_CONV_Ñandú_Meta_Q4", spend="SPEND")
+        .replace(",", ";")
+        .replace("SPEND", "182,41")
+    )
     path.write_bytes((HEADER.replace(",", ";") + "\n" + data_row + "\n").encode("latin-1"))
     raw = p.load_raw(path)
     assert list(raw.columns) == p.RAW_COLS
@@ -387,7 +428,9 @@ def test_case_file_end_to_end():
     summary = p.summarize(p.add_metrics(daily))
 
     assert (report["rows read"], report["valid rows"], len(rejected)) == (214, 191, 23)
-    assert report["invalid rows discarded"] == 17  # 6 más clicks, 7 sin conversions, 6 sin revenue (con superposición)
+    assert (
+        report["invalid rows discarded"] == 17
+    )  # 6 más clicks, 7 sin conversions, 6 sin revenue (con superposición)
     assert len(corrected) == 4  # gasto negativo pasado a positivo (la quinta se descarta igual)
     assert len(daily) == 141 and len(summary) == 12
     assert not daily[p.NUMERIC_COLS].isna().any().any()  # lo publicado no tiene números vacíos

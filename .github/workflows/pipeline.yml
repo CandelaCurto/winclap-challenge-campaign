@@ -1,29 +1,29 @@
-name: Pipeline de campañas
+name: Campaign pipeline
 
 on:
-  workflow_dispatch: # botón "Run workflow" en la pestaña Actions
-  push: # al subir un CSV nuevo, se publica en el momento sin esperar al lunes
+  workflow_dispatch: # "Run workflow" button in the Actions tab
+  push: # when a new CSV is uploaded, publish right away instead of waiting for Monday
     branches: [main]
     paths: ["data/**"]
   schedule:
-    - cron: "0 12 * * 1" # lunes 12:00 UTC = 9:00 en Argentina
+    - cron: "0 12 * * 1" # Mondays 12:00 UTC = 9:00 in Argentina
 
 permissions:
   contents: read
 
-# Una corrida a la vez: si la manual y la semanal coinciden, la segunda espera a que termine la
-# primera en vez de escribir el Sheet al mismo tiempo.
+# One run at a time: if the manual and the weekly run overlap, the second one waits for the first
+# to finish instead of writing the Sheet at the same time.
 concurrency:
   group: pipeline
   cancel-in-progress: false
 
 jobs:
   test:
-    runs-on: ubuntu-24.04 # versión fija: un cambio de sistema no llega sin aviso
+    runs-on: ubuntu-24.04 # pinned: a system change does not arrive unannounced
     timeout-minutes: 10
     strategy:
       matrix:
-        python-version: ["3.11", "3.14"] # la mínima soportada y la más nueva
+        python-version: ["3.11", "3.14"] # the minimum supported version and the newest one
     steps:
       - uses: actions/checkout@v7
 
@@ -35,33 +35,36 @@ jobs:
 
       - run: pip install -r requirements-dev.txt
 
-      # Si alguna regla dejó de cumplirse, la corrida frena acá y el Sheet no se toca.
+      - name: Formatting
+        run: black --check .
+
+      # If any rule stopped holding, the run stops here and the Sheet is not touched.
       - name: Tests
         run: python -m pytest
 
   publish:
-    needs: test # solo publica si los tests pasaron en todas las versiones
+    needs: test # only publishes if the tests passed on every version
     runs-on: ubuntu-24.04
-    timeout-minutes: 10 # hoy tarda menos de un minuto; si algo se cuelga, no corre 6 horas
+    timeout-minutes: 10 # today it takes less than a minute; if something hangs, it does not run 6 hours
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v7
         with:
-          python-version-file: .python-version # la mínima soportada, la misma que en local
+          python-version-file: .python-version # the minimum supported version, same as local
           cache: pip
           cache-dependency-path: requirements*.txt
 
       - run: pip install -r requirements.txt
 
-      - name: Limpiar, calcular y publicar en Google Sheets
+      - name: Clean, compute and publish to Google Sheets
         run: python src/pipeline.py
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
-          SPREADSHEET_ID: 1fSj01Pwtsq3kPatY8jxhsvIrMPL7OUkeMafvnGNybZ8 # resultados
-          REVIEW_SPREADSHEET_ID: 1riiICt4jCo14nDha1lX9h72UQN_Sf_pY5PiILsG72cw # descartadas y corregidas
+          SPREADSHEET_ID: 1fSj01Pwtsq3kPatY8jxhsvIrMPL7OUkeMafvnGNybZ8 # results
+          REVIEW_SPREADSHEET_ID: 1riiICt4jCo14nDha1lX9h72UQN_Sf_pY5PiILsG72cw # discarded and corrected rows
 
-      # Las tablas generadas y las filas descartadas con su motivo, como adjunto de la ejecución.
+      # The generated tables and the discarded rows with their reason, attached to the run.
       - uses: actions/upload-artifact@v7
         if: always()
         with:
