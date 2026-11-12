@@ -3,9 +3,10 @@
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 import pipeline as p
-from helpers import row, run_clean
+from helpers import row, run_clean, write_csv
 
 
 def test_rows_of_the_same_campaign_and_day_are_summed(tmp_path: Path) -> None:
@@ -72,3 +73,36 @@ def test_attribute_tie_is_won_by_the_first_in_alphabetical_order(tmp_path: Path)
     for rows_in_some_order in [valid, valid_reversed]:
         daily, _ = p.merge_same_day(rows_in_some_order)
         assert set(daily["campaign_name"]) == {"AR_CONV_Meta_Q4_a"}
+
+
+def test_campaign_name_shared_by_several_ids_is_warned(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    valid, _, _ = run_clean(
+        tmp_path,
+        row(campaign="C1006", name="CO_AWAR_Google_Q4", channel="Google Ads"),
+        row(campaign="C1001", name="CO_AWAR_Google_Q4", channel="Google Ads"),
+        row(campaign="C1002", name="AR_CONV_Meta_Q4"),
+    )
+    daily, report = p.merge_same_day(valid)
+    assert len(daily) == 3  # still different campaigns
+    assert report["campaign names shared by several IDs"] == 1
+    warning = "'CO_AWAR_Google_Q4' is used by more than one campaign_id: ['C1001', 'C1006']"
+    assert warning in caplog.text
+
+
+def test_discarded_rows_counts_the_parts_a_day_lost(tmp_path: Path) -> None:
+    rows = [
+        row(spend="288.06"),
+        row(spend="2275.52", conversions=""),  # same campaign and day, discarded
+        row(date="2026-09-05"),
+        row(date="2026-09-05"),  # a duplicate: not a lost part
+        row(date="2026-09-06"),
+        row(date="2026-09-06", clicks="5000", currency="CLP"),  # another currency's day
+        row(date="31/04/2026", conversions=""),  # unreadable date: belongs to no day
+    ]
+    result = p.clean(p.load_raw(write_csv(tmp_path, *rows)))
+    daily, _ = p.merge_same_day(result.valid)
+    daily = p.count_discarded_rows(daily, result.excluded)
+    assert daily["discarded_rows"].tolist() == [1, 0, 0]
+    assert daily.loc[0, "spend"] == 288.06  # still only the part that was kept

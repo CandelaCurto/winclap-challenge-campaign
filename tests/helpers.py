@@ -74,8 +74,8 @@ def run_clean(tmp_path: Path, *rows: str) -> tuple[pd.DataFrame, pd.DataFrame, d
     Returns:
         The clean rows, the rejected rows and the report.
     """
-    valid, rejected, _corrected, report = p.clean(p.load_raw(write_csv(tmp_path, *rows)))
-    return valid, rejected, report
+    result = p.clean(p.load_raw(write_csv(tmp_path, *rows)))
+    return result.valid, result.rejected, result.report
 
 
 @dataclass(frozen=True)
@@ -86,5 +86,6 @@ class CaseRun:
     rejected: pd.DataFrame
     corrected: pd.DataFrame
     report: dict[str, int]
+    excluded: pd.DataFrame
     daily: pd.DataFrame
     summary: pd.DataFrame

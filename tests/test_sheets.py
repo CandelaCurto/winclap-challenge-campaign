@@ -55,14 +55,59 @@ class FakeSheet:
         return lambda *args, **kwargs: self.calls.append((method, args, kwargs))
 
 
-def test_write_tab_clears_then_writes_literal_values() -> None:
+def write_to_fake_sheet(df: pd.DataFrame) -> FakeSheet:
+    """Runs write_tab against a FakeSheet.
+
+    Args:
+        df: The table to write.
+
+    Returns:
+        The fake tab, with the calls it received.
+    """
     sheet = FakeSheet()
     book = type("Book", (), {"worksheet": lambda self, title: sheet})()
-    df = pd.DataFrame({"date": pd.to_datetime(["2026-09-17"]), "spend": [10.5]})
     p.write_tab(book, "clean_data", df)
+    return sheet
+
+
+def call(sheet: FakeSheet, method: str) -> tuple[tuple[object, ...], dict[str, object]]:
+    """Returns the arguments of the first call to a method of the fake tab.
+
+    Args:
+        sheet: The fake tab.
+        method: The method name.
+
+    Returns:
+        The positional and keyword arguments.
+    """
+    _, args, kwargs = next(c for c in sheet.calls if c[0] == method)
+    return args, kwargs
+
+
+def test_write_tab_never_clears_and_resizes_before_writing_literal_values() -> None:
+    df = pd.DataFrame({"date": pd.to_datetime(["2026-09-17", "2026-09-18"]), "spend": [10.5, 3.0]})
+    sheet = write_to_fake_sheet(df)
 
     methods = [method for method, _, _ in sheet.calls]
-    assert methods.index("clear") < methods.index("update")  # replaces, does not append below
-    _, args, kwargs = sheet.calls[methods.index("update")]
+    assert "clear" not in methods  # the tab is never left empty
+    assert methods.index("resize") < methods.index("update")
+    assert call(sheet, "resize")[1] == {"rows": 3, "cols": 2}  # exactly the table
+    args, kwargs = call(sheet, "update")
     assert kwargs["value_input_option"] == "RAW"
-    assert args[0] == [["date", "spend"], [46282, 10.5]]
+    assert args[0] == [["date", "spend"], [46282, 10.5], [46283, 3.0]]
+
+
+def test_write_tab_writes_every_cell_so_old_values_do_not_survive() -> None:
+    """A cell that is now blank is sent as "" (which clears it), never skipped as None."""
+    df = pd.DataFrame({"campaign_id": ["C1", "C2"], "cpa": pd.array([1.5, None], dtype="Float64")})
+    values = call(write_to_fake_sheet(df), "update")[0][0]
+    assert len(values) == 3 and all(len(line) == 2 for line in values)  # the whole rectangle
+    assert values[2] == ["C2", ""]
+    assert all(cell is not None for line in values for cell in line)
+
+
+def test_write_tab_keeps_a_blank_row_when_the_table_is_empty() -> None:
+    """Sheets refuses to delete every row but the frozen header."""
+    sheet = write_to_fake_sheet(pd.DataFrame({"source_line": pd.Series([], dtype=int)}))
+    assert call(sheet, "resize")[1] == {"rows": 2, "cols": 1}
+    assert call(sheet, "update")[0][0] == [["source_line"], [""]]

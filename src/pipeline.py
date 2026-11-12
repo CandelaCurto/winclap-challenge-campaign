@@ -13,6 +13,7 @@ import logging
 import os
 import re
 from pathlib import Path
+from typing import NamedTuple
 
 import gspread
 import pandas as pd
@@ -21,8 +22,8 @@ log = logging.getLogger("pipeline")
 
 ROOT = Path(__file__).resolve().parent.parent  # src/pipeline.py -> repo root
 RAW_CSV = ROOT / "data" / "campaigns.csv"
-# Local copies of what goes to each tab, to review without opening the Sheets.
-DAILY_CSV = ROOT / "output" / "campaigns_daily.csv"
+# Local copies of what goes to each tab, named like the tab, to review without opening the Sheets.
+DAILY_CSV = ROOT / "output" / "clean_data.csv"
 SUMMARY_CSV = ROOT / "output" / "campaign_summary.csv"
 REJECTED_CSV = ROOT / "output" / "rejected_rows.csv"
 CORRECTED_CSV = ROOT / "output" / "corrected_rows.csv"
@@ -274,6 +275,19 @@ def normalize(raw: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def today_utc() -> pd.Timestamp:
+    """Returns today's date in UTC, without time or time zone.
+
+    "Today" is computed in UTC, which is also the GitHub Actions runner's clock, so the result does
+    not depend on where the pipeline runs. In Argentina (UTC-3), from 21:00 on, UTC is already the
+    next day.
+
+    Returns:
+        Today's date at midnight.
+    """
+    return pd.Timestamp.now(tz="UTC").normalize().tz_localize(None)
+
+
 def invalid_reasons(df: pd.DataFrame) -> pd.DataFrame:
     """Evaluates every validity rule on every row.
 
@@ -285,8 +299,9 @@ def invalid_reasons(df: pd.DataFrame) -> pd.DataFrame:
     """
     rules = {
         "unreadable date": df["date"].isna(),
-        # A day that has not happened yet cannot have performance: it is a typo (2062).
-        "future date": df["date"] > pd.Timestamp.today().normalize(),
+        # A day that has not happened yet cannot have performance: it is a typo (2062). Today is
+        # still valid; "today" is the UTC date (see today_utc).
+        "future date": df["date"] > today_utc(),
     }
     # A row missing any of its numbers is discarded, whatever the column: so the rule does not
     # depend on which value is missing in this file, and everything left is complete to compute.
@@ -332,15 +347,33 @@ def correct_negative_spend(df: pd.DataFrame) -> pd.Series:
     return corrections
 
 
-def clean(raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, int]]:
+class CleanResult(NamedTuple):
+    """What clean returns.
+
+    Attributes:
+        valid: The rows that passed every rule, normalized.
+        rejected: The discarded rows as they came, with their file line and `reason`.
+        corrected: The corrected rows that were kept, as they came, with their `correction`.
+        report: Count per step.
+        excluded: The rows discarded for breaking a rule (duplicates are not included),
+            normalized, so the days and campaigns they leave incomplete can be flagged.
+    """
+
+    valid: pd.DataFrame
+    rejected: pd.DataFrame
+    corrected: pd.DataFrame
+    report: dict[str, int]
+    excluded: pd.DataFrame
+
+
+def clean(raw: pd.DataFrame) -> CleanResult:
     """Normalizes the rows, corrects negative spend and discards duplicates and invalid rows.
 
     Args:
         raw: The file as returned by load_raw.
 
     Returns:
-        A tuple with the clean rows, the discarded rows as they came with their `reason`, the
-        corrected rows as they came with their `correction`, and a report of counts per step.
+        The valid rows, the rejected and corrected ones, a report and the excluded rows.
     """
     df = normalize(raw)
     report = {"rows read": len(df)}
@@ -358,6 +391,7 @@ def clean(raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, 
     invalid = reasons.apply(lambda flags: "; ".join(flags.index[flags]), axis=1)
     # A row can break several rules: this is the real total, not the sum of the ones above.
     report["invalid rows discarded"] = int((invalid != "").sum())
+    excluded = df[invalid != ""]
     df = df[invalid == ""]
 
     report["valid rows"] = len(df)
@@ -371,7 +405,7 @@ def clean(raw: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, 
     report["negative spend made positive"] = len(kept)
     corrected = raw.loc[kept.index].assign(correction=kept).sort_index()
     corrected = corrected.rename_axis("source_line").reset_index()
-    return df, rejected, corrected, report
+    return CleanResult(df, rejected, corrected, report, excluded)
 
 
 def campaign_attributes(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
@@ -402,6 +436,27 @@ def campaign_attributes(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
     return attrs, len(inconsistent)
 
 
+def shared_campaign_names(attrs: pd.DataFrame) -> pd.Series:
+    """Finds campaign names used by more than one campaign_id, warning about each one.
+
+    Everything is grouped by campaign_id, so a shared name does not merge two campaigns; but in the
+    Sheet two rows with the same name look like the same campaign.
+
+    Args:
+        attrs: The attributes indexed by campaign_id, as campaign_attributes returns them.
+
+    Returns:
+        The sorted campaign_ids of each shared name, indexed by name.
+    """
+    ids = attrs.reset_index().groupby("campaign_name")["campaign_id"].unique().map(sorted)
+    shared = ids[ids.map(len) > 1]
+    for name, campaign_ids in shared.items():
+        log.warning(
+            "Campaign name '%s' is used by more than one campaign_id: %s", name, campaign_ids
+        )
+    return shared
+
+
 def merge_same_day(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
     """Builds one row per campaign, day and currency, adding up the rows that share the key.
 
@@ -423,10 +478,31 @@ def merge_same_day(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
 
     report = {
         "campaigns with inconsistent attributes": inconsistent,
+        "campaign names shared by several IDs": len(shared_campaign_names(attrs)),
         "campaign-day rows": len(merged),
         "of which merged from several rows": int((grouped.size() > 1).sum()),
     }
     return merged, report
+
+
+def count_discarded_rows(daily: pd.DataFrame, excluded: pd.DataFrame) -> pd.DataFrame:
+    """Adds `discarded_rows`: how many rows of each campaign-day were discarded by a rule.
+
+    The rows of a day are added up as parts, so a day that lost a part is published with only the
+    rest (for example, part of the spend) and nothing else would show it. Duplicates do not count:
+    discarding a copy loses nothing. Rows with an unreadable date belong to no day.
+
+    Args:
+        daily: The campaign-day rows.
+        excluded: The rows discarded by a rule, normalized (CleanResult.excluded).
+
+    Returns:
+        A copy of daily with the column added; 0 for complete days.
+    """
+    counts = excluded.groupby(KEY_COLS).size().rename("discarded_rows")
+    merged = daily.join(counts, on=KEY_COLS)
+    merged["discarded_rows"] = merged["discarded_rows"].fillna(0).astype(int)
+    return merged
 
 
 def safe_divide(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
@@ -464,7 +540,7 @@ def add_metrics(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def summarize(daily: pd.DataFrame) -> pd.DataFrame:
+def summarize(daily: pd.DataFrame, excluded: pd.DataFrame) -> pd.DataFrame:
     """Builds one row per campaign: totals, and metrics recomputed over those totals.
 
     Daily metrics are never averaged: the average would give a USD 10 day the same weight as a
@@ -473,16 +549,23 @@ def summarize(daily: pd.DataFrame) -> pd.DataFrame:
 
     Args:
         daily: The campaign-day rows.
+        excluded: The rows discarded by a rule, normalized (CleanResult.excluded).
 
     Returns:
-        One row per campaign and currency, with totals and metrics.
+        One row per campaign and currency, with totals, metrics and `spend_excluded`: the spend of
+        the campaign's rows discarded by a rule (not duplicates), which the totals leave out.
     """
     # The attributes are already unique per campaign (merge_same_day): grouping by them splits no
     # row.
     campaign_cols = [col for col in OUTPUT_ID_COLS if col != "date"]
     totals = daily.groupby(campaign_cols, dropna=False)[NUMERIC_COLS].sum().reset_index()
     totals[MONEY_COLS] = totals[MONEY_COLS].round(2)  # the summed amounts, without decimal noise
-    return add_metrics(totals)
+    summary = add_metrics(totals)
+    # A discarded row with no readable spend adds nothing: the amount is unknown, not 0.
+    spend_excluded = excluded.groupby(["campaign_id", "currency"])["spend"].sum().round(2)
+    summary = summary.join(spend_excluded.rename("spend_excluded"), on=["campaign_id", "currency"])
+    summary["spend_excluded"] = summary["spend_excluded"].fillna(0.0)
+    return summary
 
 
 def quality_gate(report: dict[str, int]) -> list[str]:
@@ -553,6 +636,8 @@ SHEET_FORMATS = {
     "cpc": ("NUMBER", "#,##0.00"),
     "cpa": ("NUMBER", "#,##0.00"),
     "roas": ("NUMBER", "0.00"),
+    "discarded_rows": ("NUMBER", "0"),
+    "spend_excluded": ("NUMBER", "#,##0.00"),
     "source_line": ("NUMBER", "0"),
 }
 
@@ -590,24 +675,33 @@ def column_letter(df: pd.DataFrame, col: str) -> str:
 
 
 def write_tab(book: gspread.Spreadsheet, title: str, df: pd.DataFrame) -> None:
-    """Replaces the content of a tab: every run deletes the previous one and writes everything.
+    """Replaces the content of a tab with the table, without ever leaving it empty.
+
+    The tab is resized to exactly the table and then overwritten: the resize drops the rows and
+    columns left over from a bigger previous run, and the update writes every remaining cell, ""
+    included (an empty string clears the cell). Nothing is cleared first, so if the write fails
+    the tab keeps data instead of staying empty until the next run.
 
     Args:
         book: The spreadsheet.
         title: The tab name; it is created if it does not exist.
         df: The table to write.
     """
+    values = to_sheet_values(df)
+    if len(values) == 1:
+        # Sheets refuses to keep only the frozen header row: a table with no rows gets one blank row.
+        values.append([""] * len(df.columns))
+    rows, cols = len(values), len(df.columns)
     try:
         sheet = book.worksheet(title)
     except gspread.WorksheetNotFound:
-        sheet = book.add_worksheet(title, rows=len(df) + 1, cols=len(df.columns))
-    sheet.clear()
-    sheet.resize(rows=len(df) + 1, cols=len(df.columns))  # no rows left over from earlier runs
+        sheet = book.add_worksheet(title, rows=rows, cols=cols)
+    sheet.resize(rows=rows, cols=cols)
     # RAW: each value is written as it is. With USER_ENTERED, Sheets interprets text as if someone
     # typed it: a name starting with "=" would run as a formula.
-    sheet.update(to_sheet_values(df), "A1", value_input_option="RAW")
+    sheet.update(values, "A1", value_input_option="RAW")
 
-    last = len(df) + 1
+    last = rows
     sheet.batch_format(
         [{"range": "1:1", "format": {"textFormat": {"bold": True}}}]
         + [
@@ -730,15 +824,17 @@ def main() -> None:
         log.error("Not published: %s", bad_file)
         write_step_summary({}, f"❌ **Not published:** {bad_file}")
         raise SystemExit(1)
-    clean_df, rejected, corrected, report = clean(raw)
-    daily, merge_report = merge_same_day(clean_df)
+    cleaned = clean(raw)
+    rejected, corrected, report = cleaned.rejected, cleaned.corrected, cleaned.report
+    daily, merge_report = merge_same_day(cleaned.valid)
     report.update(merge_report)
-    daily = add_metrics(daily)
+    daily = count_discarded_rows(add_metrics(daily), cleaned.excluded)
+    report["campaign-day rows with discarded rows"] = int(daily["discarded_rows"].gt(0).sum())
     for metric in METRIC_COLS:
         report[f"missing {metric}"] = int(daily[metric].isna().sum())
     for step, count in report.items():
         log.info("%-48s %d", step, count)
-    summary = summarize(daily)
+    summary = summarize(daily, cleaned.excluded)
 
     REJECTED_CSV.parent.mkdir(exist_ok=True)
     outputs = {

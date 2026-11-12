@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 import pipeline as p
-from helpers import CaseRun, row, run_clean
+from helpers import CaseRun, row, run_clean, write_csv
 
 
 def test_safe_divide_blank_when_denominator_is_zero_or_missing() -> None:
@@ -61,7 +61,7 @@ def test_summary_recalculates_metrics_over_totals(tmp_path: Path) -> None:
         row(date="2026-09-05", spend="1000", conversions="1"),
     )
     daily, _ = p.merge_same_day(valid)
-    summary = p.summarize(p.add_metrics(daily))
+    summary = p.summarize(p.add_metrics(daily), valid.iloc[0:0])
     assert summary.loc[0, "cpa"] == pytest.approx(1010 / 11)  # not the average of 1 and 1000
 
 
@@ -77,3 +77,28 @@ def test_every_metric_can_be_redone_from_visible_columns(case_run: CaseRun) -> N
             pd.testing.assert_series_equal(
                 table[metric], p.safe_divide(table[top], table[below]), check_names=False
             )
+
+
+def test_summary_shows_the_spend_of_rows_discarded_by_a_rule(tmp_path: Path) -> None:
+    rows = [
+        row(spend="100"),
+        row(spend="100"),  # a duplicate: losing it loses nothing, so it is not counted
+        row(date="2026-09-05", spend="40", conversions=""),
+        row(date="2026-09-06", spend="-2.5", clicks="5000"),  # corrected, then discarded
+        row(date="2026-09-07", spend="n/a", revenue=""),  # unknown spend adds nothing
+        row(campaign="C2", name="AR_CONV_Meta_Q1", spend="7"),
+    ]
+    result = p.clean(p.load_raw(write_csv(tmp_path, *rows)))
+    daily, _ = p.merge_same_day(result.valid)
+    summary = p.summarize(p.add_metrics(daily), result.excluded).set_index("campaign_id")
+    assert summary.loc["C1004", "spend"] == 100
+    assert summary.loc["C1004", "spend_excluded"] == 42.5
+    assert summary.loc["C2", "spend_excluded"] == 0
+
+
+def test_spend_excluded_is_kept_per_currency(tmp_path: Path) -> None:
+    rows = [row(), row(currency="CLP"), row(date="2026-09-05", conversions="", currency="CLP")]
+    result = p.clean(p.load_raw(write_csv(tmp_path, *rows)))
+    daily, _ = p.merge_same_day(result.valid)
+    summary = p.summarize(p.add_metrics(daily), result.excluded).set_index("currency")
+    assert (summary.loc["USD", "spend_excluded"], summary.loc["CLP", "spend_excluded"]) == (0, 50)
