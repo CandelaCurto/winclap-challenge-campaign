@@ -73,11 +73,11 @@ def test_accounting_negative_spend_is_corrected_too(tmp_path):
 def test_missing_column_stops_with_a_clear_message(tmp_path):
     path = tmp_path / "campaigns.csv"
     path.write_text(HEADER.replace(",spend", "") + "\n", encoding="utf-8")
-    with pytest.raises(SystemExit, match=r"le faltan columnas: \['spend'\]"):
+    with pytest.raises(SystemExit, match=r"is missing columns: \['spend'\]"):
         p.load_raw(path)
 
 
-@pytest.mark.parametrize("content, message", [("", "está vacío"), (HEADER + "\n", "no tiene filas")])
+@pytest.mark.parametrize("content, message", [("", "is empty"), (HEADER + "\n", "has no rows")])
 def test_empty_file_stops_with_a_clear_message(tmp_path, content, message):
     path = tmp_path / "campaigns.csv"
     path.write_text(content, encoding="utf-8")
@@ -120,8 +120,8 @@ def test_classify_channel(text, expected):
 def test_duplicate_is_detected_even_with_a_different_date_format(tmp_path):
     clean, rejected, report = run_clean(tmp_path, row(date="2026-09-04"), row(date="04/09/2026"))
     assert len(clean) == 1
-    assert report["duplicados exactos"] == 1
-    assert rejected.loc[0, "reason"] == "duplicado exacto de la línea 2"
+    assert report["exact duplicates"] == 1
+    assert rejected.loc[0, "reason"] == "exact duplicate of line 2"
     assert rejected.loc[0, "source_line"] == 3
 
 
@@ -135,9 +135,9 @@ def test_impossible_rows_are_rejected_with_every_reason(tmp_path):
     )
     assert len(clean) == 1
     assert list(rejected["reason"]) == [
-        "valor negativo",
-        "más clicks que impresiones",
-        "valor negativo; más clicks que impresiones",
+        "negative value",
+        "more clicks than impressions",
+        "negative value; more clicks than impressions",
     ]
     assert rejected.loc[0, "conversions"] == "-1"  # el descartado se guarda tal como venía
 
@@ -151,9 +151,9 @@ def test_negative_spend_is_made_positive_and_recorded(tmp_path):
     assert clean["spend"].tolist() == [328.33]  # la copia corregida se detecta como duplicado
     assert list(corrected["source_line"]) == [2]
     assert corrected.loc[0, "spend"] == "-328.33"  # se guarda tal como venía
-    assert corrected.loc[0, "correction"] == "spend -328.33 pasado a positivo"
-    assert report["gasto negativo pasado a positivo"] == 1
-    # La que además tiene más clicks que impresiones se descarta: figura en rejected, no en corrected.
+    assert corrected.loc[0, "correction"] == "spend -328.33 made positive"
+    assert report["negative spend made positive"] == 1
+    # La que además tiene more clicks than impressions se descarta: figura en rejected, no en corrected.
     assert list(rejected["source_line"]) == [3, 4]
 
 
@@ -162,13 +162,13 @@ def test_row_with_any_empty_number_is_rejected_naming_the_columns(tmp_path):
         tmp_path, row(), row(date="2026-09-05", conversions="", revenue=""), row(date="2026-09-06", spend="n/a")
     )
     assert len(clean) == 1
-    assert list(rejected["reason"]) == ["conversions vacío; revenue vacío", "spend vacío"]
+    assert list(rejected["reason"]) == ["missing conversions; missing revenue", "missing spend"]
     assert rejected.loc[1, "spend"] == "n/a"  # se ve qué llegó en vez del número
 
 
 def test_fractional_count_is_not_rounded_and_the_row_is_rejected(tmp_path):
     clean, rejected, _ = run_clean(tmp_path, row(conversions='"2,5"'))  # entre comillas: la coma es decimal
-    assert clean.empty and rejected.loc[0, "reason"] == "conversions vacío"
+    assert clean.empty and rejected.loc[0, "reason"] == "missing conversions"
 
 
 # --- Unión por campaña y día ---------------------------------------------------------------------
@@ -202,7 +202,7 @@ def test_attribute_variants_do_not_split_the_primary_key(tmp_path):
     daily, report = p.merge_same_day(clean)
     assert len(daily) == 1
     assert daily.loc[0, "campaign_name"] == "AR_CONV_Meta_Q4"  # el más frecuente
-    assert report["campañas con atributos inconsistentes"] == 1
+    assert report["campaigns with inconsistent attributes"] == 1
 
 
 def test_different_currencies_are_never_summed(tmp_path):
@@ -305,7 +305,7 @@ def test_write_tab_clears_then_writes_literal_values():
     [(214, 198, True), (214, 172, True), (214, 171, False), (214, 0, False)],
 )
 def test_quality_gate(read, valid, publishes):
-    assert (p.quality_gate({"filas leídas": read, "filas válidas": valid}) == []) is publishes
+    assert (p.quality_gate({"rows read": read, "valid rows": valid}) == []) is publishes
 
 
 def test_broken_file_stops_before_publishing(tmp_path, monkeypatch):
@@ -334,8 +334,8 @@ def test_step_summary_reports_why_a_broken_file_was_not_published(tmp_path, monk
         p.log.handlers.clear()
 
     text = summary.read_text(encoding="utf-8")
-    assert "No se publicó" in text and "| filas leídas | 1 |" in text
-    assert "::error::No se publica" in capsys.readouterr().out  # anotación en la página
+    assert "Not published" in text and "| rows read | 1 |" in text
+    assert "::error::Not published" in capsys.readouterr().out  # anotación en la página
 
 
 def test_step_summary_explains_a_file_with_the_wrong_shape(tmp_path, monkeypatch):
@@ -347,7 +347,7 @@ def test_step_summary_explains_a_file_with_the_wrong_shape(tmp_path, monkeypatch
     with pytest.raises(SystemExit) as stopped:
         p.main()
     assert stopped.value.code == 1
-    assert "le faltan columnas: ['spend']" in summary.read_text(encoding="utf-8")
+    assert "is missing columns: ['spend']" in summary.read_text(encoding="utf-8")
 
 
 # --- CSVs nuevos: lo que puede cambiar de una semana a otra --------------------------------------
@@ -364,13 +364,13 @@ def test_excel_export_with_semicolons_and_latin1_is_read(tmp_path):
 
 def test_future_date_is_rejected(tmp_path):
     clean, rejected, _ = run_clean(tmp_path, row(), row(date="2062-09-17"))
-    assert len(clean) == 1 and rejected.loc[0, "reason"] == "fecha futura"
+    assert len(clean) == 1 and rejected.loc[0, "reason"] == "future date"
 
 
 def test_gate_stops_when_too_many_rows_need_correcting():
-    report = {"filas leídas": 214, "filas válidas": 202, "gasto negativo pasado a positivo": 202}
-    assert "puede haber cambiado cómo exporta la plataforma" in p.quality_gate(report)[0]
-    report["gasto negativo pasado a positivo"] = 4
+    report = {"rows read": 214, "valid rows": 202, "negative spend made positive": 202}
+    assert "the way the platform exports may have changed" in p.quality_gate(report)[0]
+    report["negative spend made positive"] = 4
     assert p.quality_gate(report) == []
 
 
@@ -386,8 +386,8 @@ def test_case_file_end_to_end():
     daily, _ = p.merge_same_day(clean)
     summary = p.summarize(p.add_metrics(daily))
 
-    assert (report["filas leídas"], report["filas válidas"], len(rejected)) == (214, 191, 23)
-    assert report["inválidas descartadas"] == 17  # 6 más clicks, 7 sin conversions, 6 sin revenue (con superposición)
+    assert (report["rows read"], report["valid rows"], len(rejected)) == (214, 191, 23)
+    assert report["invalid rows discarded"] == 17  # 6 más clicks, 7 sin conversions, 6 sin revenue (con superposición)
     assert len(corrected) == 4  # gasto negativo pasado a positivo (la quinta se descarta igual)
     assert len(daily) == 141 and len(summary) == 12
     assert not daily[p.NUMERIC_COLS].isna().any().any()  # lo publicado no tiene números vacíos
