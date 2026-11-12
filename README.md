@@ -1,258 +1,94 @@
-# Pipeline de performance de campañas
+# Campaign performance pipeline
 
-Pipeline en Python que toma el CSV de performance diaria de campañas tal como sale de las plataformas,
-lo limpia, calcula CTR, CPC, CPA y ROAS, arma un resumen por campaña y lo publica en Google Sheets.
-Corre desde GitHub Actions al subir datos nuevos, a mano y todos los lunes a las 9:00 de Argentina.
+A Python pipeline that takes the daily campaign performance CSV as the ad platforms export it,
+cleans it, computes CTR, CPC, CPA and ROAS, builds a per-campaign summary and publishes it to Google
+Sheets. It runs on GitHub Actions when new data is pushed, by hand, and every Monday.
 
-**Resultado publicado:** [Google Sheet (lectura)](https://docs.google.com/spreadsheets/d/1fSj01Pwtsq3kPatY8jxhsvIrMPL7OUkeMafvnGNybZ8/edit)
+## TL;DR
 
-| Tab | Contenido |
-|---|---|
-| `clean_data` | Data limpia: una fila por campaña y día, con sus métricas |
-| `campaign_summary` | Una fila por campaña: totales y métricas recalculadas sobre los totales |
+**Deliverables**
 
-**Revisión de la limpieza:** [Google Sheet (lectura)](https://docs.google.com/spreadsheets/d/1riiICt4jCo14nDha1lX9h72UQN_Sf_pY5PiILsG72cw/edit)
+- Repository: [CandelaCurto/winclap-challenge-campaign](https://github.com/CandelaCurto/winclap-challenge-campaign)
+- Results Sheet: [`clean_data` and `campaign_summary`](https://docs.google.com/spreadsheets/d/1fSj01Pwtsq3kPatY8jxhsvIrMPL7OUkeMafvnGNybZ8/edit)
+- Review Sheet: [`rejected_rows` and `corrected_rows`](https://docs.google.com/spreadsheets/d/1riiICt4jCo14nDha1lX9h72UQN_Sf_pY5PiILsG72cw/edit)
+- A successful workflow run: [Actions run 43102532134](https://github.com/CandelaCurto/winclap-challenge-campaign/actions/runs/43102532134)
 
-| Tab | Contenido |
-|---|---|
-| `rejected_rows` | Cada fila descartada tal como venía, su línea en el archivo original y el motivo |
-| `corrected_rows` | Cada fila corregida tal como venía y la corrección hecha |
+**Key cleaning decisions**
 
-**Análisis del archivo del caso:** qué problemas tenía el CSV entregado, cuántas filas afectó cada uno
-y los números de esta carga, en [docs/analisis-del-caso.md](docs/analisis-del-caso.md).
+1. **A row missing any number is discarded, never filled with 0**, and the day it belonged to is
+   flagged (`discarded_rows`) and its spend shown per campaign (`spend_excluded`).
+2. **One row per date + `campaign_id` + currency:** different rows of the same day are parts and
+   are added up; identical rows (after normalizing) are duplicates and are dropped.
+3. **Metrics are recomputed over totals, never averaged**, and are left blank (not 0) when the
+   denominator is 0.
+4. **Negative spend is a sign error:** it is made positive and logged in `corrected_rows`.
+5. **Impossible rows are discarded with their reason:** more clicks than impressions, negative
+   values, unreadable or future dates (judged in UTC).
+6. **Messy formats are normalized, not guessed:** two date formats, `"$ 182,41"`-style amounts,
+   channels recognized by keyword; anything ambiguous (`1e3`, `09/17/2026`) is discarded.
+7. **Nothing disappears silently:** every discarded or corrected row goes to the review Sheet as it
+   came, with its file line.
+8. **A broken file is never published:** if more than 20% of the rows are discarded or corrected,
+   the run fails and the Sheets keep the previous data.
 
-**Diccionario de datos:** qué es cada columna publicada y cómo se calcula, en
-[docs/diccionario.md](docs/diccionario.md).
+## How to run it
 
-## Cómo funciona
-
-```
-data/campaigns.csv → validar → limpiar → unir por campaña y día → métricas → resumen → control → Google Sheets
-```
-
-1. **Validar:** el archivo tiene las columnas esperadas y al menos una fila.
-2. **Limpiar:** normaliza formatos, corrige lo corregible y descarta lo imposible.
-3. **Unir:** deja una sola fila por campaña, día y moneda.
-4. **Métricas:** CTR, CPC, CPA y ROAS por fila.
-5. **Resumen:** totales por campaña y métricas recalculadas sobre esos totales.
-6. **Control:** si el archivo vino roto, no publica y el Sheet conserva los datos anteriores.
-7. **Publicar:** reemplaza el contenido de los Sheets; correrlo dos veces no duplica datos.
-
-## Contenido del repo
-
-| Archivo | Qué es |
-|---|---|
-| `src/pipeline.py` | Todo el pipeline |
-| `data/campaigns.csv` | El CSV que se procesa (hoy, el original del caso) |
-| `requirements.txt` | Dependencias con versión fija (pandas, gspread, google-auth) |
-| `requirements-dev.txt`, `pyproject.toml`, `tests/` | Los tests de cada regla y lo necesario para correrlos. `tests/fixtures/` tiene una copia fija del CSV del caso |
-| `.python-version` | Python 3.11 (la mínima soportada), la misma en local y al publicar desde GitHub Actions; los tests corren con 3.11 y 3.14 |
-| `.github/workflows/pipeline.yml` | La ejecución en GitHub Actions |
-| `docs/analisis-del-caso.md` | Los problemas del archivo del caso y sus números |
-| `docs/diccionario.md` | Qué es cada columna publicada y cómo se calcula |
-
-Cada corrida genera además `output/` (no se versiona): las tablas en CSV, `rejected_rows.csv` y
-`corrected_rows.csv`.
-
-## Cómo correrlo
+Requires Python 3.11 or newer and `make`.
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate          # en Windows: .venv\Scripts\activate
-pip install -r requirements-dev.txt
-
-python -m pytest                   # tests: no publican nada ni necesitan credenciales
-python src/pipeline.py --no-publish    # procesa data/campaigns.csv y deja el resultado en output/
-python src/pipeline.py --input otro.csv --no-publish
+make install          # creates .venv and installs the dependencies
+make check            # black --check + tests: nothing is published, no credentials needed
+make run-local        # processes data/campaigns.csv into output/, without publishing
 ```
 
-Para publicar en Google Sheets:
+`make help` lists every command. To process another file:
+`.venv/bin/python src/pipeline.py --input other.csv --no-publish`.
 
-1. Una cuenta de servicio de Google Cloud con las APIs de Sheets y Drive habilitadas, y su clave JSON.
-2. Los Sheets compartidos como **Editor** con el email de esa cuenta de servicio.
-3. Estas variables de entorno, y `python src/pipeline.py`:
+To publish to Google Sheets:
 
-| Variable | Qué es |
-|---|---|
-| `SPREADSHEET_ID` | El ID del Sheet de resultados (la parte de la URL entre `/d/` y `/edit`) |
-| `REVIEW_SPREADSHEET_ID` | Opcional: el ID del Sheet de revisión. Sin él, la revisión queda solo en `output/` |
-| `GOOGLE_APPLICATION_CREDENTIALS` | Ruta al JSON de la cuenta de servicio (en una computadora) |
-| `GOOGLE_CREDENTIALS` | El contenido de ese JSON (en GitHub Actions, como secreto del repo) |
+1. A Google Cloud service account with the Sheets and Drive APIs enabled, and its JSON key.
+2. Both Sheets shared as **Editor** with that service account's email.
+3. `cp .env-template .env`, fill in `SPREADSHEET_ID`, `REVIEW_SPREADSHEET_ID` (optional) and
+   `GOOGLE_APPLICATION_CREDENTIALS`, then `make run`.
 
-### En GitHub Actions
+In GitHub Actions the key is the `GOOGLE_CREDENTIALS` secret and the Sheet IDs are the
+`SPREADSHEET_ID` and `REVIEW_SPREADSHEET_ID` repository variables; see
+[how to update the data](docs/updating-data.md).
 
-- **Cuándo corre:** al subir un CSV nuevo a `data/`, a mano (*Actions → Pipeline de campañas → Run
-  workflow*) y todos los lunes a las 9:00 de Argentina.
-- **Qué hace:** instala las dependencias, corre los tests y, **solo si pasan**, el pipeline. Una
-  corrida a la vez, con un máximo de 10 minutos.
-- **Qué deja:** el reporte de la corrida como tabla en la página de la ejecución, los avisos como
-  anotaciones, y `output/` como adjunto descargable.
-- **Configuración:** el secreto `GOOGLE_CREDENTIALS` en *Settings → Secrets and variables → Actions*.
-  Los IDs de los dos Sheets están en el workflow.
-- GitHub desactiva los workflows programados de un repo público tras 60 días sin actividad; se
-  reactivan con un click en la pestaña Actions.
+## What it publishes
 
-### Cómo actualizar los datos
-
-El pipeline lee siempre `data/campaigns.csv`. Para procesar datos nuevos, se reemplaza ese archivo
-**con el mismo nombre**:
-
-- **Desde la web de GitHub:** carpeta `data` → *Add file → Upload files* → arrastrar el CSV nuevo
-  llamado `campaigns.csv` → *Commit changes*.
-- **Desde git:** copiar el archivo en `data/campaigns.csv`, commit y push a `main`.
-
-Al llegar el archivo nuevo, el workflow corre solo. Si el archivo está roto, la corrida termina en
-rojo con el motivo, el Sheet de resultados conserva los datos anteriores y el Sheet de revisión
-muestra qué se descartó o corrigió.
-
-Se aceptan las exportaciones más comunes: separadas por coma o por punto y coma (Excel en español),
-en UTF-8 o en Latin-1 (Excel en Windows). Las columnas tienen que llamarse igual; el orden, las
-mayúsculas y las columnas de más no importan.
-
-## Reglas de limpieza
-
-### Una fila con algún número vacío se descarta
-
-Si a una fila le falta cualquiera de sus números (impresiones, clicks, gasto, conversiones o revenue),
-se descarta entera y el motivo dice qué columna faltaba (`conversions vacío`). Antes de llegar a esta
-regla se probaron otras; estas son las razones por las que se eligió:
-
-1. **Vacío no es cero, y no se puede rellenar.** Un 0 es un dato ("medimos y no hubo"); un vacío es su
-   falta ("no sabemos"). Convertirlo en 0 inventaría un dato: diría que esas conversiones no
-   existieron.
-2. **Una fila incompleta contamina los totales.** Si se conserva una fila con gasto pero sin
-   conversiones, al sumar la campaña el gasto cuenta entero y las conversiones solo en parte: el CPA
-   sale peor por un dato que falta, no por la campaña. Mantener esas filas obliga a una regla especial
-   (calcular el CPA solo con los días que tienen el dato), y entonces `spend / conversions` de la tabla
-   ya no da el `cpa` mostrado: un analista que no conoce la regla lo lee como un error.
-3. **Lo publicado se puede verificar sin conocer reglas.** Con todas las filas completas, cada métrica
-   se rehace con las columnas de la misma fila (`cpa = spend / conversions`), en el día y en el
-   resumen.
-4. **La regla escala.** Es la misma para cualquier columna numérica: no depende de qué dato venga
-   vacío en este archivo (hoy, conversiones y revenue; mañana puede ser otro).
-5. **No se pierde de vista.** Cada fila descartada queda en `rejected_rows`, tal como venía y con el
-   motivo, y si se descarta demasiado (más del 20 %) el pipeline no publica.
-
-**El costo:** junto con el dato que falta se pierden los que estaban bien en esa fila (sus
-impresiones, clicks y gasto), así que los totales publicados quedan por debajo de los reales. Para un
-análisis de eficiencia (CTR, CPC, CPA, ROAS) se prefirió datos completos y verificables a totales
-completos con métricas sesgadas. En "Mejoras para escalar" hay alternativas para recuperar esos datos.
-
-### El resto de las reglas
-
-| Situación | Qué hace | Por qué |
+| Sheet | Tab | Content |
 |---|---|---|
-| Fechas `AAAA-MM-DD` o `DD/MM/AAAA` | Las lleva a fecha | Es el mismo dato en otro formato |
-| Espacios sobrantes en textos | Los recorta | Si no, la misma campaña parece dos |
-| Canal escrito de muchas formas | Lo reconoce por palabra clave: "google"/"youtube" → Google Ads; "meta"/"facebook"/"instagram" → Meta Ads; "linkedin" → LinkedIn Ads | Una variante nueva (`Google Ads Search`) se reconoce sola; solo una plataforma nueva de verdad requiere agregar una línea |
-| Canal desconocido | Lo deja como vino y avisa | La fila tiene datos válidos: descartarla haría desaparecer gasto |
-| Canal distinto al del nombre de la campaña (`AR_CONV_Meta_Q4`) | Avisa | Control cruzado: algo está mal cargado |
-| Números con `$`, `USD`, coma o punto (`"$ 182,41"`, `"1.234,5"`) | Los convierte a número | El último separador es decimal si lo siguen 1 o 2 dígitos; si no, es de miles |
-| Número entre paréntesis (`"(182.41)"`) | Lo lee como negativo | Convención contable |
-| Texto que no es un número (`1e3`, `n/a`) | Lo trata como vacío y descarta la fila | No se adivina: en `rejected_rows` se ve qué llegó |
-| Gasto negativo | Lo pasa a positivo y lo registra en `corrected_rows` | El gasto no puede ser negativo: se asume un error de signo y se conserva la fila |
-| Fila idéntica a otra (ya normalizada) | Descarta la copia | Es un duplicado: sumaría dos veces lo mismo |
-| Más clicks que impresiones | Descarta la fila | Un click requiere una impresión |
-| Impresiones, clicks, conversiones o revenue negativos | Descarta la fila | Valor imposible |
-| Fecha ilegible o futura | Descarta la fila | Un día que no pasó no puede tener performance (`2062-09-17` es un tipeo) |
-| Algún número vacío | Descarta la fila (`<columna> vacío`) | Ver arriba |
-| Cantidad con decimales (12,5 clicks) | La trata como vacía y descarta la fila | No se redondea a escondidas |
+| Results | `clean_data` | One row per campaign and day, with its metrics and `discarded_rows` |
+| Results | `campaign_summary` | One row per campaign: totals, metrics over the totals and `spend_excluded` |
+| Review | `rejected_rows` | Each discarded row as it came, its file line and the reason |
+| Review | `corrected_rows` | Each corrected row as it came and the correction made |
 
-Toda fila descartada queda en `rejected_rows` y toda fila corregida en `corrected_rows`, tal como
-venían en el archivo, para poder auditar qué se sacó o cambió sin confiar en el script a ciegas.
+Each run replaces the tabs' content (running twice never duplicates data) and also writes them as
+CSVs in `output/` (`clean_data.csv`, `campaign_summary.csv`, `rejected_rows.csv`,
+`corrected_rows.csv`).
 
-## Una fila por campaña y día
+```
+data/campaigns.csv → validate → clean → merge by campaign-day → metrics → summary → quality gate → Google Sheets
+```
 
-**La clave es fecha + `campaign_id` + moneda.** Si para la misma campaña y el mismo día llegan varias
-filas **distintas**, se interpretan como **partes** del día (por ejemplo, grupos de anuncios) y se
-suman. Si son **iguales en todo**, son un duplicado y se descarta la copia. La moneda está en la
-clave porque sumar dólares con pesos da un número sin sentido. Nombre, canal, país y objetivo no
-están en la clave: son atributos fijos de la campaña, y si uno viniera escrito distinto un día, no
-debe partir la fila; se usa el valor más frecuente y el log avisa.
+## Repository
 
-**Los montos sumados se redondean al centavo**, para sacar el ruido de sumar decimales
-(`486.29999999999995`). Las métricas no se redondean: el formato se aplica al publicar.
+| Path | What it is |
+|---|---|
+| `src/pipeline.py` | The whole pipeline |
+| `tests/` | One file per stage; `tests/fixtures/` has a fixed copy of the case CSV |
+| `data/campaigns.csv` | The CSV that is processed (today, the case's original) |
+| `requirements.txt`, `requirements-dev.txt` | Pinned dependencies (runtime, and black + pytest) |
+| `pyproject.toml`, `.python-version` | Tool configuration; Python 3.11, the minimum supported |
+| `Makefile`, `.env-template` | Local commands and the environment variables they read |
+| `.github/workflows/pipeline.yml` | Lint and tests on Python 3.11 and 3.14, then publish |
 
-## Métricas
+## More detail
 
-**CTR = clicks / impressions · CPC = spend / clicks · CPA = spend / conversions · ROAS = revenue /
-spend.** Una sola función las calcula por fila y sobre los totales del resumen, así las fórmulas no
-pueden quedar distintas entre las dos tablas.
-
-**Si el denominador es 0, la métrica queda vacía.** Por ejemplo, el CPA de un día sin conversiones.
-No 0, porque un CPA de 0 diría que las conversiones salieron gratis. No infinito, porque no se puede
-sumar, graficar ni comparar. El 0 en el numerador sí es válido: revenue 0 da ROAS 0 (se invirtió y no
-volvió nada). Es el único vacío que queda en los datos publicados, y la fila se conserva.
-
-**El resumen recalcula las métricas sobre los totales**, nunca promediando las de cada día: el
-promedio le da el mismo peso a un día de USD 10 que a uno de USD 1.000. Como no hay números vacíos,
-cada métrica se rehace con las columnas de la misma fila (`cpa = spend / conversions`), sin conocer
-ninguna regla. El [diccionario](docs/diccionario.md) explica cada columna.
-
-**El objetivo de la campaña sirve para leer las métricas, no para calcularlas.** Una campaña de
-Awareness no se juzga por su CPA, pero el CPA se calcula igual que en las demás: si la regla cambiara
-según el objetivo, la misma columna significaría cosas distintas según la fila.
-
-## Calidad
-
-- **El archivo se valida antes de procesarlo.** Si falta una columna, está vacío o solo tiene el
-  encabezado, frena con un mensaje que dice qué pasó (`le faltan columnas: ['spend']`).
-- **Un archivo roto no se publica.** Si no queda ninguna fila válida, si se descarta más del 20 % de
-  las filas o si hay que corregir el gasto en más del 20 % (señal de que cambió cómo exporta la
-  plataforma), no toca el Sheet de resultados y la corrida termina con error: el Sheet conserva los
-  datos anteriores y GitHub avisa por mail. La revisión se publica igual, porque es justo lo que hay
-  que mirar.
-- **Tests antes de publicar.** Cubren cada regla y el archivo del caso de punta a punta. Usan una
-  copia fija del CSV del caso, no `data/campaigns.csv`, que cambia con cada carga: los tests prueban
-  las reglas; el control de calidad, el archivo de cada semana.
-- **Al Sheet se escribe el valor tal cual** (modo `RAW`): un texto que empiece con `=` no se ejecuta
-  como fórmula. Las fechas van como fecha de verdad, con formato `AAAA-MM-DD`.
-- **Los montos se muestran sin símbolo de moneda:** `$` se confunde con pesos; la moneda la dice la
-  columna `currency`. El CTR se muestra como porcentaje y los montos y el ROAS con dos decimales.
-
-## Supuestos y riesgos
-
-- **Los totales publicados quedan por debajo de los reales**, porque las filas con algún vacío se
-  descartan con sus datos buenos (ver "Una fila con algún número vacío se descarta"). Las filas
-  descartadas, con su gasto, quedan en `rejected_rows`.
-- **Cada CSV trae el histórico completo**, no solo los días nuevos. Por eso cada corrida reemplaza el
-  contenido de los Sheets.
-- **Las filas distintas de un mismo día son partes, no correcciones.** Si fueran versiones corregidas
-  del mismo dato, sumarlas lo contaría dos veces. Es lo primero que validaría con quien conoce la
-  exportación.
-- **El gasto negativo es un error de signo.** Si fuera un reembolso o un ajuste, pasarlo a positivo
-  sumaría gasto que no existió; cada caso queda en `corrected_rows` para validarlo.
-- **`DD/MM/AAAA` es día/mes.** Un archivo solo con fechas ambiguas (`05/09`) necesitaría confirmar el
-  formato de origen.
-- **Los umbrales del 20 %** son un criterio, no un dato: se ajustan en una línea
-  (`MAX_DISCARDED_SHARE`, `MAX_CORRECTED_SHARE`).
-
-## Mejoras para escalar
-
-**Recuperar los datos de las filas con vacíos.** Hoy se descartan enteras (ver "Una fila con algún
-número vacío se descarta"). Alternativas para no perder sus datos buenos, de menor a mayor esfuerzo:
-
-- **Columnas de base para cada métrica:** conservar todas las filas y agregar al resumen
-  `spend_with_conversions` y `spend_with_revenue`, el gasto de los días que sí tienen ese dato. El
-  gasto total queda completo y cada métrica sigue verificable a la vista
-  (`cpa = spend_with_conversions / conversions`), a costa de dos columnas que hay que explicar.
-- **Una tab de completitud:** conservar las filas con su vacío en `clean_data`, marcar cada una con
-  una columna `complete` (sí/no) y calcular el resumen solo con las completas. El analista ve todo y
-  elige qué usar.
-- **Pedir el dato faltante:** las filas en `rejected_rows` son una lista de qué falta. Si la
-  plataforma permite reexportar esos días (los datos de conversión suelen llegar con demora), se
-  vuelven a cargar en el CSV siguiente y entran solas.
-- **Separar las métricas por dato disponible:** calcular CTR y CPC (que no necesitan conversiones ni
-  revenue) con todas las filas, y CPA y ROAS solo con las completas, publicadas en tablas distintas.
-- No se recomienda **imputar** (estimar el valor faltante con un promedio): en un análisis de
-  performance un dato inventado es peor que uno ausente.
-
-- **Fuente de datos automática:** en vez de subir el CSV al repo, leerlo de una carpeta de Google
-  Drive o de la API de cada plataforma (Google Ads, Meta, LinkedIn). Solo cambiaría `load_raw`.
-- **Archivos incrementales:** si las plataformas exportaran solo los días nuevos, guardar cada archivo
-  y combinarlos por fecha y campaña, quedándose con la versión más reciente de cada día.
-- **Publicación atómica:** hoy cada tab se borra y después se escribe; si la conexión se corta en el
-  medio, la tab puede quedar vacía hasta la próxima corrida. Escribiría en una tab temporal, la
-  cambiaría por la vieja solo cuando esté completa y activaría los reintentos de gspread.
-- **Historial:** guardar cada corrida con su fecha de carga en una base (BigQuery, por ejemplo) para
-  comparar semanas, con el Sheet como vista.
+- [Cleaning rules](docs/cleaning-rules.md): every rule and why, merging, metrics and quality checks.
+- [Data dictionary](docs/data-dictionary.md): what each published column is and how it is computed.
+- [Case file analysis](docs/case-analysis.md): the problems of the delivered CSV and its numbers.
+- [How to update the data](docs/updating-data.md): new CSVs and the GitHub Actions setup.
+- [Assumptions and risks](docs/assumptions-and-risks.md)
+- [Scaling improvements](docs/scaling-improvements.md)
