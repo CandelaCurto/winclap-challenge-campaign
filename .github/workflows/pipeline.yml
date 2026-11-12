@@ -61,8 +61,8 @@ jobs:
         run: python src/pipeline.py
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
-          SPREADSHEET_ID: 1fSj01Pwtsq3kPatY8jxhsvIrMPL7OUkeMafvnGNybZ8 # results
-          REVIEW_SPREADSHEET_ID: 1riiICt4jCo14nDha1lX9h72UQN_Sf_pY5PiILsG72cw # discarded and corrected rows
+          SPREADSHEET_ID: ${{ vars.SPREADSHEET_ID }} # results Sheet
+          REVIEW_SPREADSHEET_ID: ${{ vars.REVIEW_SPREADSHEET_ID }} # review Sheet: discarded and corrected rows
 
       # The generated tables and the discarded rows with their reason, attached to the run.
       - uses: actions/upload-artifact@v7
