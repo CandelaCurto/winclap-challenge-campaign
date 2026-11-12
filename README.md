@@ -42,10 +42,10 @@ data/campaigns.csv → validar → limpiar → unir por campaña y día → mét
 
 | Archivo | Qué es |
 |---|---|
-| `pipeline.py` | Todo el pipeline |
+| `src/pipeline.py` | Todo el pipeline |
 | `data/campaigns.csv` | El CSV que se procesa (hoy, el original del caso) |
 | `requirements.txt` | Dependencias con versión fija (pandas, gspread, google-auth) |
-| `requirements-dev.txt`, `pytest.ini`, `tests/` | Los tests de cada regla y lo necesario para correrlos. `tests/fixtures/` tiene una copia fija del CSV del caso |
+| `requirements-dev.txt`, `pyproject.toml`, `tests/` | Los tests de cada regla y lo necesario para correrlos. `tests/fixtures/` tiene una copia fija del CSV del caso |
 | `.python-version` | Python 3.14, la misma versión en local y en GitHub Actions |
 | `.github/workflows/pipeline.yml` | La ejecución en GitHub Actions |
 | `docs/analisis-del-caso.md` | Los problemas del archivo del caso y sus números |
@@ -62,15 +62,15 @@ source .venv/bin/activate          # en Windows: .venv\Scripts\activate
 pip install -r requirements-dev.txt
 
 python -m pytest                   # tests: no publican nada ni necesitan credenciales
-python pipeline.py --no-publish    # procesa data/campaigns.csv y deja el resultado en output/
-python pipeline.py --input otro.csv --no-publish
+python src/pipeline.py --no-publish    # procesa data/campaigns.csv y deja el resultado en output/
+python src/pipeline.py --input otro.csv --no-publish
 ```
 
 Para publicar en Google Sheets:
 
 1. Una cuenta de servicio de Google Cloud con las APIs de Sheets y Drive habilitadas, y su clave JSON.
 2. Los Sheets compartidos como **Editor** con el email de esa cuenta de servicio.
-3. Estas variables de entorno, y `python pipeline.py`:
+3. Estas variables de entorno, y `python src/pipeline.py`:
 
 | Variable | Qué es |
 |---|---|

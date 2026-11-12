@@ -37,7 +37,7 @@ jobs:
         run: python -m pytest
 
       - name: Limpiar, calcular y publicar en Google Sheets
-        run: python pipeline.py
+        run: python src/pipeline.py
         env:
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
           SPREADSHEET_ID: 1fSj01Pwtsq3kPatY8jxhsvIrMPL7OUkeMafvnGNybZ8 # resultados

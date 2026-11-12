@@ -3,7 +3,7 @@
 Lee el CSV tal como sale de las plataformas, lo limpia, calcula métricas y publica el resultado
 en Google Sheets. Las decisiones de limpieza están explicadas en el README.
 
-Uso: python pipeline.py [--no-publish]
+Uso: python src/pipeline.py [--no-publish]
 """
 
 import argparse
@@ -19,7 +19,7 @@ import pandas as pd
 
 log = logging.getLogger("pipeline")
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).resolve().parent.parent  # src/pipeline.py -> raíz del repo
 RAW_CSV = ROOT / "data" / "campaigns.csv"
 # Copias locales de lo que va a cada tab, para revisar sin abrir los Sheets.
 DAILY_CSV = ROOT / "output" / "campaigns_daily.csv"
