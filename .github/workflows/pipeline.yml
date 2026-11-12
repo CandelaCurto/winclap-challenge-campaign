@@ -18,15 +18,18 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  run:
+  test:
     runs-on: ubuntu-24.04 # versión fija: un cambio de sistema no llega sin aviso
-    timeout-minutes: 10 # hoy tarda menos de un minuto; si algo se cuelga, no corre 6 horas
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.14"] # la mínima soportada y la más nueva
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v7
         with:
-          python-version-file: .python-version # la misma versión que en local
+          python-version: ${{ matrix.python-version }}
           cache: pip
           cache-dependency-path: requirements*.txt
 
@@ -35,6 +38,21 @@ jobs:
       # Si alguna regla dejó de cumplirse, la corrida frena acá y el Sheet no se toca.
       - name: Tests
         run: python -m pytest
+
+  publish:
+    needs: test # solo publica si los tests pasaron en todas las versiones
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10 # hoy tarda menos de un minuto; si algo se cuelga, no corre 6 horas
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version-file: .python-version # la mínima soportada, la misma que en local
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - run: pip install -r requirements.txt
 
       - name: Limpiar, calcular y publicar en Google Sheets
         run: python src/pipeline.py

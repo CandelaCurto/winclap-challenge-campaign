@@ -46,7 +46,7 @@ data/campaigns.csv → validar → limpiar → unir por campaña y día → mét
 | `data/campaigns.csv` | El CSV que se procesa (hoy, el original del caso) |
 | `requirements.txt` | Dependencias con versión fija (pandas, gspread, google-auth) |
 | `requirements-dev.txt`, `pyproject.toml`, `tests/` | Los tests de cada regla y lo necesario para correrlos. `tests/fixtures/` tiene una copia fija del CSV del caso |
-| `.python-version` | Python 3.14, la misma versión en local y en GitHub Actions |
+| `.python-version` | Python 3.11 (la mínima soportada), la misma en local y al publicar desde GitHub Actions; los tests corren con 3.11 y 3.14 |
 | `.github/workflows/pipeline.yml` | La ejecución en GitHub Actions |
 | `docs/analisis-del-caso.md` | Los problemas del archivo del caso y sus números |
 | `docs/diccionario.md` | Qué es cada columna publicada y cómo se calcula |
