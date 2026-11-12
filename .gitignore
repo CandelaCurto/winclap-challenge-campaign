@@ -1,7 +1,7 @@
 .venv/
 __pycache__/
 *.pyc
-# Credenciales de Google: nunca al repo
+# Google credentials: never in the repo
 *.json
 .env
 output/
