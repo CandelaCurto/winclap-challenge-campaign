@@ -121,7 +121,7 @@ def test_negative_spend_is_made_positive_and_recorded(tmp_path: Path) -> None:
         row(spend="-328.33"),
         row(date="2026-09-05", spend="-50", clicks="2000"),
     ]
-    valid, rejected, corrected, report, _ = p.clean(p.load_raw(write_csv(tmp_path, *rows)))
+    valid, rejected, corrected, report = p.clean(p.load_raw(write_csv(tmp_path, *rows)))
 
     assert valid["spend"].tolist() == [328.33]  # the corrected copy is detected as a duplicate
     assert corrected["source_line"].tolist() == [2]
@@ -141,11 +141,3 @@ def test_today_is_the_utc_date_without_time() -> None:
     today = p.today_utc()
     assert today.tz is None and today == today.normalize()
     assert today == pd.Timestamp.now(tz="UTC").normalize().tz_localize(None)
-
-
-def test_excluded_rows_are_the_ones_discarded_by_a_rule_not_the_duplicates(tmp_path: Path) -> None:
-    result = p.clean(
-        p.load_raw(write_csv(tmp_path, row(), row(), row(date="2026-09-05", conversions="")))
-    )
-    assert result.excluded.index.tolist() == [4]
-    assert result.excluded.loc[4, "date"] == pd.Timestamp("2026-09-05")  # normalized

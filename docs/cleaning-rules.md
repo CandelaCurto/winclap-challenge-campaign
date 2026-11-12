@@ -30,11 +30,9 @@ rules were tried before this one; these are the reasons it was chosen:
 **The cost:** along with the missing value, the good ones in that row (its impressions, clicks and
 spend) are lost, so the published totals are below the real ones. For an efficiency analysis (CTR,
 CPC, CPA, ROAS), complete and verifiable data was preferred over complete totals with biased
-metrics. **That cost is visible:** the rows of one day are added up as parts, so a day that lost a
-part would otherwise be published with only the rest. `clean_data.discarded_rows` says how many rows
-of each campaign-day were discarded (above 0 means the day is incomplete), and
-`campaign_summary.spend_excluded` says how much spend each campaign lost that way. Alternatives to
-recover that data are in [scaling improvements](scaling-improvements.md).
+metrics. Since the rows of one day are added up as parts, a day that lost a part is published with
+only the rest; every discarded row, with its spend, is in `rejected_rows`. Alternatives to recover
+that data are in [scaling improvements](scaling-improvements.md).
 
 ## The rest of the rules
 

@@ -2,9 +2,8 @@
 
 ## Recovering the data of rows with missing values
 
-Today they are discarded whole, and `discarded_rows` / `spend_excluded` show where (see
-[cleaning rules](cleaning-rules.md)). Alternatives to keep their good data, from least to most
-effort:
+Today they are discarded whole (see [cleaning rules](cleaning-rules.md)). Alternatives to keep
+their good data, from least to most effort:
 
 - **Base columns for each metric:** keep every row and add `spend_with_conversions` and
   `spend_with_revenue` to the summary, the spend of the days that do have that value. Total spend is

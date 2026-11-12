@@ -355,15 +355,12 @@ class CleanResult(NamedTuple):
         rejected: The discarded rows as they came, with their file line and `reason`.
         corrected: The corrected rows that were kept, as they came, with their `correction`.
         report: Count per step.
-        excluded: The rows discarded for breaking a rule (duplicates are not included),
-            normalized, so the days and campaigns they leave incomplete can be flagged.
     """
 
     valid: pd.DataFrame
     rejected: pd.DataFrame
     corrected: pd.DataFrame
     report: dict[str, int]
-    excluded: pd.DataFrame
 
 
 def clean(raw: pd.DataFrame) -> CleanResult:
@@ -373,7 +370,7 @@ def clean(raw: pd.DataFrame) -> CleanResult:
         raw: The file as returned by load_raw.
 
     Returns:
-        The valid rows, the rejected and corrected ones, a report and the excluded rows.
+        The valid rows, the rejected and corrected ones, and a report.
     """
     df = normalize(raw)
     report = {"rows read": len(df)}
@@ -391,7 +388,6 @@ def clean(raw: pd.DataFrame) -> CleanResult:
     invalid = reasons.apply(lambda flags: "; ".join(flags.index[flags]), axis=1)
     # A row can break several rules: this is the real total, not the sum of the ones above.
     report["invalid rows discarded"] = int((invalid != "").sum())
-    excluded = df[invalid != ""]
     df = df[invalid == ""]
 
     report["valid rows"] = len(df)
@@ -405,7 +401,7 @@ def clean(raw: pd.DataFrame) -> CleanResult:
     report["negative spend made positive"] = len(kept)
     corrected = raw.loc[kept.index].assign(correction=kept).sort_index()
     corrected = corrected.rename_axis("source_line").reset_index()
-    return CleanResult(df, rejected, corrected, report, excluded)
+    return CleanResult(df, rejected, corrected, report)
 
 
 def campaign_attributes(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
@@ -485,26 +481,6 @@ def merge_same_day(df: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, int]]:
     return merged, report
 
 
-def count_discarded_rows(daily: pd.DataFrame, excluded: pd.DataFrame) -> pd.DataFrame:
-    """Adds `discarded_rows`: how many rows of each campaign-day were discarded by a rule.
-
-    The rows of a day are added up as parts, so a day that lost a part is published with only the
-    rest (for example, part of the spend) and nothing else would show it. Duplicates do not count:
-    discarding a copy loses nothing. Rows with an unreadable date belong to no day.
-
-    Args:
-        daily: The campaign-day rows.
-        excluded: The rows discarded by a rule, normalized (CleanResult.excluded).
-
-    Returns:
-        A copy of daily with the column added; 0 for complete days.
-    """
-    counts = excluded.groupby(KEY_COLS).size().rename("discarded_rows")
-    merged = daily.join(counts, on=KEY_COLS)
-    merged["discarded_rows"] = merged["discarded_rows"].fillna(0).astype(int)
-    return merged
-
-
 def safe_divide(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
     """Divides row by row, leaving the result blank when it cannot be computed.
 
@@ -540,7 +516,7 @@ def add_metrics(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def summarize(daily: pd.DataFrame, excluded: pd.DataFrame) -> pd.DataFrame:
+def summarize(daily: pd.DataFrame) -> pd.DataFrame:
     """Builds one row per campaign: totals, and metrics recomputed over those totals.
 
     Daily metrics are never averaged: the average would give a USD 10 day the same weight as a
@@ -549,23 +525,16 @@ def summarize(daily: pd.DataFrame, excluded: pd.DataFrame) -> pd.DataFrame:
 
     Args:
         daily: The campaign-day rows.
-        excluded: The rows discarded by a rule, normalized (CleanResult.excluded).
 
     Returns:
-        One row per campaign and currency, with totals, metrics and `spend_excluded`: the spend of
-        the campaign's rows discarded by a rule (not duplicates), which the totals leave out.
+        One row per campaign and currency, with totals and metrics.
     """
     # The attributes are already unique per campaign (merge_same_day): grouping by them splits no
     # row.
     campaign_cols = [col for col in OUTPUT_ID_COLS if col != "date"]
     totals = daily.groupby(campaign_cols, dropna=False)[NUMERIC_COLS].sum().reset_index()
     totals[MONEY_COLS] = totals[MONEY_COLS].round(2)  # the summed amounts, without decimal noise
-    summary = add_metrics(totals)
-    # A discarded row with no readable spend adds nothing: the amount is unknown, not 0.
-    spend_excluded = excluded.groupby(["campaign_id", "currency"])["spend"].sum().round(2)
-    summary = summary.join(spend_excluded.rename("spend_excluded"), on=["campaign_id", "currency"])
-    summary["spend_excluded"] = summary["spend_excluded"].fillna(0.0)
-    return summary
+    return add_metrics(totals)
 
 
 def quality_gate(report: dict[str, int]) -> list[str]:
@@ -636,8 +605,6 @@ SHEET_FORMATS = {
     "cpc": ("NUMBER", "#,##0.00"),
     "cpa": ("NUMBER", "#,##0.00"),
     "roas": ("NUMBER", "0.00"),
-    "discarded_rows": ("NUMBER", "0"),
-    "spend_excluded": ("NUMBER", "#,##0.00"),
     "source_line": ("NUMBER", "0"),
 }
 
@@ -828,13 +795,12 @@ def main() -> None:
     rejected, corrected, report = cleaned.rejected, cleaned.corrected, cleaned.report
     daily, merge_report = merge_same_day(cleaned.valid)
     report.update(merge_report)
-    daily = count_discarded_rows(add_metrics(daily), cleaned.excluded)
-    report["campaign-day rows with discarded rows"] = int(daily["discarded_rows"].gt(0).sum())
+    daily = add_metrics(daily)
     for metric in METRIC_COLS:
         report[f"missing {metric}"] = int(daily[metric].isna().sum())
     for step, count in report.items():
         log.info("%-48s %d", step, count)
-    summary = summarize(daily, cleaned.excluded)
+    summary = summarize(daily)
 
     REJECTED_CSV.parent.mkdir(exist_ok=True)
     outputs = {

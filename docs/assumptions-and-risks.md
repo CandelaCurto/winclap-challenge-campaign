@@ -1,9 +1,9 @@
 # Assumptions and risks
 
 - **Published totals are below the real ones**, because rows with a missing value are discarded
-  along with their good data (see [cleaning rules](cleaning-rules.md)). `discarded_rows` in
-  `clean_data` and `spend_excluded` in `campaign_summary` show where and how much; the rows
-  themselves are in `rejected_rows`.
+  along with their good data (see [cleaning rules](cleaning-rules.md)). A day made of several
+  rows that lost one of them is published with only the rest, and nothing in the results Sheet
+  marks it: the discarded rows, with their spend, are in `rejected_rows`.
 - **Each CSV brings the complete history**, not just the new days. That is why every run replaces
   the content of the Sheets.
 - **Different rows of the same day are parts, not corrections.** If they were corrected versions of

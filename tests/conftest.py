@@ -21,15 +21,14 @@ def isolated_outputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture(scope="session")
 def case_run() -> CaseRun:
     """Runs the case file through every step once, for the tests that read its results."""
-    valid, rejected, corrected, report, excluded = p.clean(p.load_raw(CASE_CSV))
+    valid, rejected, corrected, report = p.clean(p.load_raw(CASE_CSV))
     daily, merge_report = p.merge_same_day(valid)
-    daily = p.count_discarded_rows(p.add_metrics(daily), excluded)
+    daily = p.add_metrics(daily)
     return CaseRun(
         valid=valid,
         rejected=rejected,
         corrected=corrected,
         report={**report, **merge_report},
-        excluded=excluded,
         daily=daily,
-        summary=p.summarize(daily, excluded),
+        summary=p.summarize(daily),
     )

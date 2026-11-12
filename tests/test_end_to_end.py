@@ -33,18 +33,6 @@ def test_case_file_end_to_end(case_run: CaseRun) -> None:
     assert p.quality_gate(report) == []
 
 
-def test_case_file_flags_incomplete_days(case_run: CaseRun) -> None:
-    daily = case_run.daily.set_index(["campaign_id", "date"])
-    # C1004 on 2026-09-04 lost a USD 2,275.52 part with no conversions: it is published with
-    # USD 288.06, and now says it is incomplete.
-    assert daily.loc[("C1004", "2026-09-04"), "spend"] == 288.06
-    assert daily.loc[("C1004", "2026-09-04"), "discarded_rows"] == 1
-    assert case_run.daily["discarded_rows"].sum() <= case_run.report["invalid rows discarded"]
-    assert case_run.summary["spend_excluded"].sum() == pytest.approx(
-        case_run.excluded["spend"].sum()
-    )
-
-
 def test_run_without_publishing_writes_every_local_csv(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

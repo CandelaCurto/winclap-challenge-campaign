@@ -42,7 +42,6 @@ clicks than impressions and missing conversions and revenue, and it is also dupl
 | **Valid rows** | **191** (10.7% discarded, below the 20% maximum) |
 | Of which, with spend corrected to positive | 4 (1.9%) |
 | **Campaign-day rows** | **141** (41 made of 2 or 3 original rows) |
-| Of which, with discarded rows (`discarded_rows > 0`) | 10 |
 | **Campaigns in the summary** | **12** |
 
 Merge check: total spend and impressions are the same before and after merging.
@@ -53,11 +52,11 @@ Merge check: total spend and impressions are the same before and after merging.
 missing conversions or revenue. Their impressions, clicks and spend were valid and are lost with
 them: they add up to **USD 11,254.61, 6.6% of the file's spend**. For example, C1004 on 9/4 had two
 rows: one of USD 288.06 with 9 conversions and another of USD 2,275.52 with no conversions. Only
-the first is kept, so that day shows USD 288.06 of spend. That is why `clean_data` now has
-`discarded_rows` (1 on that day) and `campaign_summary` has `spend_excluded`: the spend of all
-discarded rows, USD 15,781.68 in total (it also includes the rows with more clicks than
-impressions). 10 of the 17 discarded rows belonged to a day that still has other rows; the other 7
-were the only row of their day, which is therefore not in `clean_data`.
+the first is kept, so that day shows USD 288.06 of spend. Counting every row discarded by a rule
+(not duplicates), USD 15,781.68 of spend is left out of the totals. 10 of the 17 discarded rows
+belonged to a day that still has other rows, so 10 published campaign-days are incomplete; the
+other 7 were the only row of their day, which is therefore not in `clean_data`. The price of
+publishing only complete, verifiable rows; all of them, with their spend, are in `rejected_rows`.
 
 **Blank metrics.** Only CPA is left blank, on 7 days, the ones with 0 conversions: dividing by 0
 has no result. CTR, CPC and ROAS have no blanks.

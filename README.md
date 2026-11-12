@@ -15,8 +15,8 @@ Sheets. It runs on GitHub Actions when new data is pushed, by hand, and every Mo
 
 **Key cleaning decisions**
 
-1. **A row missing any number is discarded, never filled with 0**, and the day it belonged to is
-   flagged (`discarded_rows`) and its spend shown per campaign (`spend_excluded`).
+1. **A row missing any number is discarded, never filled with 0**, and kept with its reason in
+   the review Sheet.
 2. **One row per date + `campaign_id` + currency:** different rows of the same day are parts and
    are added up; identical rows (after normalizing) are duplicates and are dropped.
 3. **Metrics are recomputed over totals, never averaged**, and are left blank (not 0) when the
@@ -59,8 +59,8 @@ In GitHub Actions the key is the `GOOGLE_CREDENTIALS` secret and the Sheet IDs a
 
 | Sheet | Tab | Content |
 |---|---|---|
-| Results | `clean_data` | One row per campaign and day, with its metrics and `discarded_rows` |
-| Results | `campaign_summary` | One row per campaign: totals, metrics over the totals and `spend_excluded` |
+| Results | `clean_data` | One row per campaign and day, with its metrics |
+| Results | `campaign_summary` | One row per campaign: totals and metrics recomputed over the totals |
 | Review | `rejected_rows` | Each discarded row as it came, its file line and the reason |
 | Review | `corrected_rows` | Each corrected row as it came and the correction made |
 

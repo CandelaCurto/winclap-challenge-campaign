@@ -86,6 +86,5 @@ class CaseRun:
     rejected: pd.DataFrame
     corrected: pd.DataFrame
     report: dict[str, int]
-    excluded: pd.DataFrame
     daily: pd.DataFrame
     summary: pd.DataFrame
